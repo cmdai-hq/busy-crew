@@ -1,11 +1,13 @@
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from agentdeck.hook import hook_state
+from agentdeck.hook import hook_state, update_snapshot
 from agentdeck.model import Session, layout
 from agentdeck.observe import Observer, pid_matches, rollout_state
 from agentdeck.render import CLAWD, MINI_CLAWD, Frame, PALETTE, compact, render
@@ -21,7 +23,7 @@ def claude_duo_crop(state):
     expected = Frame()
     expected.sprite(CLAWD, 2, 3, "c", dim=state == "idle")
     expected.text("1", 19, 3, scale=2)
-    expected.mark(state, "claude", 28, 3)
+    expected.mark(state, "claude", 27 if state == "idle" else 28, 3, sleeping=state == "idle")
     color = {"working": "c", "ready": "g", "idle": "d"}[state]
     expected.dot(17, 14, color)
     expected.dot(18, 14, color)
@@ -158,7 +160,8 @@ class ObserverTests(unittest.TestCase):
         self.runtime = self.home / "runtime"
         self.runtime.mkdir()
         self.now = 10000
-        self.observer = Observer(self.runtime, self.home, clock=lambda: self.now, alive=lambda *_: True)
+        self.observer = Observer(self.runtime, self.home, clock=lambda: self.now, alive=lambda *_: True,
+                                 claude_root=self.home / ".claude", codex_root=self.home / ".codex")
 
     def tearDown(self):
         self.temp.cleanup()
@@ -179,6 +182,9 @@ class ObserverTests(unittest.TestCase):
 
     def test_claude_icon_survives_completion_and_acknowledgement_until_process_closes(self):
         native_path = self.home / ".claude/sessions/a.json"
+        hook_path = self.runtime / "hooks/a.json"
+        hook = update_snapshot({}, {"session_id": "a", "hook_event_name": "UserPromptSubmit"}, self.now)
+        write_json(hook_path, hook)
         codex = session("codex")
         write_json(native_path, {
             "sessionId": "a", "pid": 123, "status": "busy", "statusUpdatedAt": self.now * 1000})
@@ -190,6 +196,8 @@ class ObserverTests(unittest.TestCase):
             self.now += 1
             write_json(native_path, {
                 "sessionId": "a", "pid": 123, "status": "idle", "statusUpdatedAt": self.now * 1000})
+            hook = update_snapshot(hook, {"session_id": "a", "hook_event_name": "Stop"}, self.now)
+            write_json(hook_path, hook)
             items = self.observer.poll()
             self.assertEqual([(s.provider, s.state) for s in items], [("claude", "ready"), ("codex", "working")])
             self.assertEqual(layout(items), ("duo", None))
@@ -218,11 +226,14 @@ class ObserverTests(unittest.TestCase):
 
     def test_latest_root_turn_only_and_dangling_turn_excluded(self):
         root = self.home / ".codex"; root.mkdir()
-        with sqlite3.connect(root / "state_5.sqlite") as db:
+        with closing(sqlite3.connect(root / "state_5.sqlite")) as db, db:
             db.execute("CREATE TABLE threads(id,rollout_path,updated_at,archived,agent_path,thread_source)")
             for sid, freshness, agent_path in [("live", 10000, None), ("stale", 8000, None), ("sub", 10000, "sub")]:
                 db.execute("INSERT INTO threads VALUES(?,?,?,?,?,?)", (sid, str(root/sid), freshness, 0, agent_path, "user"))
-        with sqlite3.connect(root / "thread_history_1.sqlite") as db:
+                turn = {"live": "current", "stale": "dangling", "sub": "subturn"}[sid]
+                (root / sid).write_text(json.dumps(event("task_started", turn_id=turn)) + "\n")
+                os.utime(root / sid, (freshness, freshness))
+        with closing(sqlite3.connect(root / "thread_history_1.sqlite")) as db, db:
             db.execute("CREATE TABLE thread_turns(thread_id,turn_id,rollout_ordinal,status,completed_at)")
             db.executemany("INSERT INTO thread_turns VALUES(?,?,?,?,?)", [
                 ("live", "ancient", 1, "inProgress", None), ("live", "current", 2, "inProgress", None),
@@ -232,7 +243,8 @@ class ObserverTests(unittest.TestCase):
 
     def test_source_failure_is_unknown_not_zero(self):
         with patch.object(self.observer, "codex", side_effect=sqlite3.DatabaseError()):
-            self.assertEqual(self.observer.poll()[0].state, "unknown")
+            self.assertEqual(self.observer.poll(), [])
+            self.assertEqual(self.observer.errors, ["codex"])
 
     def test_invalid_pid_never_counts(self):
         self.assertFalse(pid_matches(-1))

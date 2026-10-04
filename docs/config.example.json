@@ -1,0 +1,5 @@
+{
+  "address": "http://busybar.local",
+  "timezone": "Europe/Paris",
+  "ccusage": "/absolute/path/to/ccusage"
+}

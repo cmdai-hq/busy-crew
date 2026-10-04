@@ -2,8 +2,23 @@
 name = "busybar-agent-deck"
 version = "0.1.0"
 description = "Claude and Codex sessions on a BUSY Bar's front LED display"
+readme = "README.md"
+license = "PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.14",
+]
 dependencies = ["busylib==2.6.0", "pillow==12.3.0"]
+
+[project.urls]
+Homepage = "https://github.com/tristanbes/busybar-agent-deck"
+Issues = "https://github.com/tristanbes/busybar-agent-deck/issues"
+Source = "https://github.com/tristanbes/busybar-agent-deck"
 
 [project.scripts]
 agent-deck = "agentdeck.cli:main"

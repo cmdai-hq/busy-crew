@@ -9,9 +9,11 @@ class Session:
     version: str
 
 
-def layout(sessions):
+def layout(sessions, errors=()):
     """Every observed session stays visible until its source removes it."""
-    providers = {s.provider for s in sessions}
+    if set(errors) & {"claude", "codex"}:
+        return "duo", None
+    providers = {s.provider for s in sessions} | (set(errors) & {"claude", "codex"})
     return ("duo", None) if len(providers) != 1 else ("team", next(iter(providers)))
 
 
