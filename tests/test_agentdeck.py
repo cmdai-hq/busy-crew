@@ -8,13 +8,24 @@ from unittest.mock import patch
 from agentdeck.hook import hook_state
 from agentdeck.model import Session, layout
 from agentdeck.observe import Observer, pid_matches, rollout_state
-from agentdeck.render import PALETTE, compact, render
+from agentdeck.render import CLAWD, MINI_CLAWD, Frame, PALETTE, compact, render
 from agentdeck.storage import write_json
 from agentdeck.usage import Usage, parse_usage
 
 
 def session(provider, state="working", sid="a"):
     return Session(provider, sid, state, "1")
+
+
+def claude_duo_crop(state):
+    expected = Frame()
+    expected.sprite(CLAWD, 2, 3, "c", dim=state == "idle")
+    expected.text("1", 19, 3, scale=2)
+    expected.mark(state, "claude", 28, 3)
+    color = {"working": "c", "ready": "g", "idle": "d"}[state]
+    expected.dot(17, 14, color)
+    expected.dot(18, 14, color)
+    return [row[:35] for row in expected.rows]
 
 
 class RenderingTests(unittest.TestCase):
@@ -28,13 +39,39 @@ class RenderingTests(unittest.TestCase):
     def test_both_working_use_duo(self):
         self.assertEqual(layout([session("claude"), session("codex")]), ("duo", None))
 
-    def test_idle_other_provider_does_not_force_duo(self):
-        self.assertEqual(layout([session("claude"), session("codex", "idle")]), ("team", "claude"))
+    def test_open_idle_and_ready_provider_sessions_keep_duo_layout(self):
+        for provider, other in [("claude", "codex"), ("codex", "claude")]:
+            for state in ["ready", "idle"]:
+                with self.subTest(provider=provider, state=state):
+                    items = [session(provider, state), session(other)]
+                    self.assertEqual(layout(items), ("duo", None))
 
-    def test_ready_other_provider_stays_small_green_badge(self):
-        items = [session("claude"), session("codex", "ready")]
+    def test_idle_and_ready_claude_keep_full_icon_while_codex_works(self):
+        for state in ["ready", "idle"]:
+            with self.subTest(state=state):
+                frame = render([session("claude", state), session("codex")])
+                self.assertEqual([row[:35] for row in frame.rows], claude_duo_crop(state))
+
+    def test_idle_claude_keeps_its_team_tile_alongside_working_session(self):
+        items = [session("claude", "idle", "idle"), session("claude", sid="working")]
         self.assertEqual(layout(items), ("team", "claude"))
-        self.assertEqual(render(items).rows[0][70], "g")
+        expected = Frame()
+        expected.sprite(MINI_CLAWD, 25, 7, "c")
+        expected.mark("working", "claude", 28, 0)
+        expected.dot(28, 15, "c")
+        expected.sprite(MINI_CLAWD, 37, 7, "c", dim=True)
+        expected.mark("idle", "claude", 40, 0)
+        self.assertEqual(render(items).rows, expected.rows)
+
+    def test_duo_count_includes_open_idle_sessions(self):
+        items = [session("claude", "idle", "idle"), session("claude", sid="working"), session("codex")]
+        expected = Frame()
+        expected.sprite(CLAWD, 2, 3, "c")
+        expected.text("2", 19, 3, scale=2)
+        expected.mark("working", "claude", 28, 3)
+        for x, color in [(17, "c"), (18, "c"), (21, "d"), (22, "d")]:
+            expected.dot(x, 14, color)
+        self.assertEqual([row[:35] for row in render(items).rows], [row[:35] for row in expected.rows])
 
     def test_waiting_overrides_token_view(self):
         items = [session("claude", "waiting")]
@@ -45,6 +82,16 @@ class RenderingTests(unittest.TestCase):
         frame = render(items)
         self.assertEqual(frame.rows[0][6], "y")
         self.assertTrue(any(v != "." for row in frame.rows for v in row[60:]))
+
+    def test_team_overflow_counts_idle_sessions_and_keeps_waiting_first(self):
+        items = [session("claude", "idle", str(i)) for i in range(10)] + [session("claude", "waiting", "z")]
+        expected = Frame()
+        for x, state in [(2, "waiting"), (14, "idle"), (26, "idle"), (38, "idle"), (50, "idle")]:
+            expected.sprite(MINI_CLAWD, x, 7, "c", dim=state == "idle")
+            expected.mark(state, "claude", x + 3, 0)
+        expected.text("+", 62, 2)
+        expected.text("6", 60, 9)
+        self.assertEqual(render(items).rows, expected.rows)
 
     def test_xpm_always_native_size_and_legal_palette(self):
         for count in [0, 1, 6, 7, 100]:
@@ -129,6 +176,36 @@ class ObserverTests(unittest.TestCase):
             "sessionId": "a", "pid": 123, "status": "busy", "statusUpdatedAt": 10000000})
         self.observer.alive = lambda *_: False
         self.assertEqual(self.observer.claude(), [])
+
+    def test_claude_icon_survives_completion_and_acknowledgement_until_process_closes(self):
+        native_path = self.home / ".claude/sessions/a.json"
+        codex = session("codex")
+        write_json(native_path, {
+            "sessionId": "a", "pid": 123, "status": "busy", "statusUpdatedAt": self.now * 1000})
+        with patch.object(self.observer, "codex", return_value=[codex]):
+            items = self.observer.poll()
+            self.assertEqual([(s.provider, s.state) for s in items], [("claude", "working"), ("codex", "working")])
+            self.assertEqual([row[:35] for row in render(items).rows], claude_duo_crop("working"))
+
+            self.now += 1
+            write_json(native_path, {
+                "sessionId": "a", "pid": 123, "status": "idle", "statusUpdatedAt": self.now * 1000})
+            items = self.observer.poll()
+            self.assertEqual([(s.provider, s.state) for s in items], [("claude", "ready"), ("codex", "working")])
+            self.assertEqual(layout(items), ("duo", None))
+            self.assertEqual([row[:35] for row in render(items).rows], claude_duo_crop("ready"))
+
+            self.observer.acknowledge(items)
+            self.now += 1
+            items = self.observer.poll()
+            self.assertEqual([(s.provider, s.state) for s in items], [("claude", "idle"), ("codex", "working")])
+            self.assertEqual(layout(items), ("duo", None))
+            self.assertEqual([row[:35] for row in render(items).rows], claude_duo_crop("idle"))
+
+            self.observer.alive = lambda *_: False
+            items = self.observer.poll()
+            self.assertEqual(items, [codex])
+            self.assertEqual(layout(items), ("team", "codex"))
 
     def test_waiting_hook_then_post_tool_resume(self):
         write_json(self.home / ".claude/sessions/a.json", {

@@ -4,11 +4,11 @@ Un petit équipage de **Clawd terracotta** et de **personnages Codex bleus** sur
 
 ## Une vue qui suit ton équipe
 
-**Claude et Codex travaillent tous les deux → Duo.** Les grands personnages accompagnent le nombre de sessions actives de chaque famille.
+**Des sessions Claude et Codex sont suivies → Duo.** Les grands personnages accompagnent le nombre de sessions de chaque famille, y compris les sessions Claude ouvertes et inactives.
 
 ![Duo : exemple fictif](docs/duo.png)
 
-**Une seule famille travaille → Petite équipe.** Chaque petit personnage représente une session réelle. Une session Claude inactive n'empêche pas une équipe entièrement bleue, et inversement.
+**Une seule famille est présente → Petite équipe.** Chaque petit personnage représente une session réelle. Une session Claude reste visible quand sa réponse se termine, puis en gris après acquittement, tant que son processus reste ouvert. Elle conserve aussi sa place si une autre session travaille.
 
 ![Équipe Claude : exemple fictif](docs/claude-team.png)
 ![Équipe Codex : exemple fictif](docs/codex-team.png)
@@ -23,7 +23,7 @@ Ces trois images sont des exemples fictifs générés par `agent-deck demo docs`
 | Gris / `?` | Inactif ou source indisponible |
 | `+N` | Sessions supplémentaires au-delà des six emplacements |
 
-Les sessions qui demandent une interaction passent en premier. Une réponse terminée de l'autre famille reste signalée par une petite coche verte, sans empêcher la vue d'équipe de la famille qui travaille. Aucun affichage personnalisé sur l'écran arrière.
+Les sessions qui demandent une interaction passent en premier. Une réponse terminée garde son personnage et une coche verte. Après acquittement, une session Claude ouverte reste affichée en gris ; une conversation Codex terminée est retirée du suivi. Aucun affichage personnalisé sur l'écran arrière.
 
 ## Installation sur macOS
 

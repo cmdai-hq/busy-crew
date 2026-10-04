@@ -10,12 +10,8 @@ class Session:
 
 
 def layout(sessions):
-    """Work/attention determines layout; an idle terminal doesn't force Duo."""
-    providers = {s.provider for s in sessions if s.state in {"working", "waiting", "unknown"}}
-    if not providers:
-        providers = {s.provider for s in sessions if s.state == "ready"}
-    if not providers:
-        providers = {s.provider for s in sessions}
+    """Every observed session stays visible until its source removes it."""
+    providers = {s.provider for s in sessions}
     return ("duo", None) if len(providers) != 1 else ("team", next(iter(providers)))
 
 

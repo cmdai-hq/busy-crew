@@ -105,10 +105,11 @@ def render(sessions, view="sessions", tokens=None, phase=0, errors=()):
     elif mode == "duo":
         for name, x in [("claude", 0), ("codex", 37)]:
             group = [s for s in sessions if s.provider == name]
-            count = len([s for s in group if s.state != "idle"])
+            count = len(group)
             sprite = CLAWD if name == "claude" else CODEX
             frame.sprite(sprite, x + 2, 3 if name == "claude" else 0,
-                         "c" if name == "claude" else None, dim=not count)
+                         "c" if name == "claude" else None,
+                         dim=all(s.state in {"idle", "unknown"} for s in group))
             label = number(count)
             frame.text(label, x + (19 if len(label) == 1 else 16), 3, scale=2 if len(label) == 1 else 1)
             frame.mark(aggregate(group), name, x + 28, 3)
@@ -118,10 +119,9 @@ def render(sessions, view="sessions", tokens=None, phase=0, errors=()):
         for y in [4, 7, 10]: frame.dot(35, y, "d")
     else:
         group = sorted([s for s in sessions if s.provider == provider], key=lambda s: (ORDER[s.state], s.id))
-        active = [s for s in group if s.state != "idle"] or group
         # Six tiles maximum. The last becomes a numeric overflow tile, never a fake agent.
-        overflow = len(active) > 6
-        visible = active[:5 if overflow else 6]
+        overflow = len(group) > 6
+        visible = group[:5 if overflow else 6]
         count = len(visible)
         xs = [2 + i * 12 for i in range(6)] if overflow else [int(36 - (count * 12)/2 + i*12 + 1) for i in range(count)]
         for x, session in zip(xs, visible):
@@ -131,12 +131,9 @@ def render(sessions, view="sessions", tokens=None, phase=0, errors=()):
             if session.state == "working":
                 frame.dot(x + 3 + phase * 2, 15, "c" if provider == "claude" else "B")
         if overflow:
-            hidden = active[5:]
+            hidden = group[5:]
             frame.text("+", 62, 2, "y" if any(s.state == "waiting" for s in hidden) else "w")
             frame.text(number(len(hidden)), 60, 9)
-        # Completion from the other provider remains a small green notification.
-        if any(s.provider != provider and s.state == "ready" for s in sessions):
-            frame.sprite(MARKS["ready"], 68, 0, "g")
     if errors:
         frame.text("?", 69, 11, "d")
     return frame
