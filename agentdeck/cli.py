@@ -44,6 +44,8 @@ def main():
     install.add_argument("--timezone", help="IANA time zone; preserve existing zone on reinstall")
     install.add_argument("--no-claude-hooks", action="store_true")
     sub.add_parser("uninstall")
+    menubar = sub.add_parser("menubar", help="optional macOS menu bar status icon")
+    menubar.add_argument("action", choices=["install", "uninstall"])
     sub.add_parser("status")
     sub.add_parser("ack")
     view = sub.add_parser("view"); view.add_argument("name", choices=["sessions", "tokens"])
@@ -73,6 +75,12 @@ def main():
     elif args.command == "uninstall":
         from .install import uninstall
         uninstall()
+    elif args.command == "menubar":
+        from .install import install_menubar, uninstall_menubar
+        if args.action == "install":
+            install_menubar()
+        else:
+            uninstall_menubar()
     elif args.command == "status":
         state = current_status(state_dir())
         # CLI output intentionally omits session IDs.

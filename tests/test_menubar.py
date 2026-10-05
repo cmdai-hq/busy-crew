@@ -1,17 +1,25 @@
 """Menu bar status: health model, published status and the optional menu app."""
+import contextlib
+import importlib
+import io
 import json
 import os
+import plistlib
 import shutil
+import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-import agentdeck
+from agentdeck import cli
 from agentdeck.health import code_fingerprint, health
 
-SWIFT_SOURCE = Path(agentdeck.__file__).parent / "menubar" / "AgentDeckMenu.swift"
+installer = importlib.import_module("agentdeck.install")
+
 SWIFT_TESTS = bool(shutil.which("xcrun") and (os.environ.get("CI") or os.environ.get("AGENT_DECK_SWIFT_TESTS")))
 
 STARTED = 1000.0
@@ -68,13 +76,132 @@ class FingerprintTests(unittest.TestCase):
             self.assertNotEqual(code_fingerprint(root), second)
 
 
+class FakeTools:
+    """xcrun and launchctl, with launchd state kept per target."""
+
+    def __init__(self):
+        self.loaded, self.calls = set(), []
+        self.compiler_missing = self.compile_fails = self.fail_bootstrap = False
+
+    def run(self, args, **kwargs):
+        args = [str(arg) for arg in args]
+        self.calls.append(args)
+        if args[0].endswith("xcrun"):
+            if args[1] == "--find":
+                return subprocess.CompletedProcess(args, 1 if self.compiler_missing else 0, "", "")
+            if self.compile_fails:
+                return subprocess.CompletedProcess(args, 1, "", "error: fixture")
+            Path(args[args.index("-o") + 1]).write_bytes(b"binary %d" % len(self.calls))
+            return subprocess.CompletedProcess(args, 0, "", "")
+        command = args[1]
+        if command == "print":
+            loaded = args[2] in self.loaded
+            return subprocess.CompletedProcess(args, 0 if loaded else 113, "", "" if loaded else "Could not find service")
+        if command == "bootout":
+            self.loaded.discard(args[2])
+        if command == "bootstrap":
+            self.loaded.add(args[2] + "/" + plistlib.loads(Path(args[3]).read_bytes())["Label"])
+            if self.fail_bootstrap:
+                self.fail_bootstrap = False
+                raise subprocess.CalledProcessError(5, args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+
+class MenuBarInstallTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.home = Path(temp.name) / "fake home"
+        self.home.mkdir()
+        self.runtime = self.home / "runtime"
+        self.runtime.mkdir(mode=0o700)
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.dict(os.environ, {"HOME": str(self.home), "AGENT_DECK_STATE": str(self.runtime)}))
+        stack.enter_context(patch.object(Path, "home", return_value=self.home))
+        stack.enter_context(patch.object(installer, "_preflight", return_value="launchctl"))
+        stack.enter_context(patch.object(installer.shutil, "which", return_value="/usr/bin/xcrun"))
+        self.tools = FakeTools()
+        stack.enter_context(patch.object(installer.subprocess, "run", side_effect=self.tools.run))
+        stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+        self.binary = self.runtime / "menubar" / "AgentDeckMenu"
+        self.plist = installer.menubar_agent_path()
+        self.target = "gui/%d/%s" % (os.getuid(), installer.MENU_LABEL)
+
+    def installed(self):
+        return self.binary.read_bytes(), self.plist.read_bytes()
+
+    def test_install_compiles_writes_plist_and_bootstraps(self):
+        installer.install_menubar()
+        self.assertEqual(stat.S_IMODE(self.binary.stat().st_mode), 0o700)
+        agent = plistlib.loads(self.plist.read_bytes())
+        self.assertEqual(agent["Label"], "local.busybar.agent-deck.menubar")
+        self.assertEqual(agent["ProgramArguments"], [str(self.binary)])
+        self.assertEqual(agent["KeepAlive"], {"SuccessfulExit": False})
+        self.assertEqual(agent["LimitLoadToSessionType"], "Aqua")
+        self.assertEqual(agent["EnvironmentVariables"], {"AGENT_DECK_STATE": str(self.runtime),
+                         "AGENT_DECK_PYTHON": sys.executable, "AGENT_DECK_LABEL": installer.LABEL})
+        self.assertIn(self.target, self.tools.loaded)
+        compile_call = next(call for call in self.tools.calls if call[1] == "swiftc")
+        self.assertEqual(compile_call[2:5], ["-swift-version", "5", "-O"])
+        self.assertEqual(list(self.runtime.glob(".menubar-build-*")), [])
+
+    def test_missing_compiler_changes_nothing(self):
+        self.tools.compiler_missing = True
+        with self.assertRaisesRegex(RuntimeError, "xcode-select --install"):
+            installer.install_menubar()
+        self.assertFalse(self.plist.exists())
+        self.assertFalse(self.binary.exists())
+
+    def test_compile_failure_keeps_previous_install(self):
+        installer.install_menubar()
+        before = self.installed()
+        self.tools.compile_fails = True
+        with self.assertRaisesRegex(RuntimeError, "failed to compile"):
+            installer.install_menubar()
+        self.assertEqual(self.installed(), before)
+        self.assertIn(self.target, self.tools.loaded)
+
+    def test_failed_bootstrap_restores_previous_binary_and_plist(self):
+        installer.install_menubar()
+        before = self.installed()
+        self.tools.fail_bootstrap = True
+        with self.assertRaises(subprocess.CalledProcessError):
+            installer.install_menubar()
+        self.assertEqual(self.installed(), before)
+        self.assertIn(self.target, self.tools.loaded)
+        self.assertFalse(self.binary.with_name("AgentDeckMenu.previous").exists())
+
+    def test_uninstall_menubar_removes_agent_plist_and_binary(self):
+        installer.install_menubar()
+        installer.uninstall_menubar()
+        self.assertFalse(self.plist.exists())
+        self.assertFalse(self.binary.exists())
+        self.assertNotIn(self.target, self.tools.loaded)
+
+    def test_full_uninstall_removes_menubar_only_when_present(self):
+        installer.uninstall()
+        self.assertFalse(any(installer.MENU_LABEL in " ".join(call) for call in self.tools.calls))
+        installer.install_menubar()
+        installer.uninstall()
+        self.assertFalse(self.plist.exists())
+        self.assertFalse(self.binary.exists())
+        self.assertNotIn(self.target, self.tools.loaded)
+
+    def test_cli_dispatches_menubar_actions(self):
+        for action, function in [("install", "install_menubar"), ("uninstall", "uninstall_menubar")]:
+            with patch.object(installer, function) as called, patch.object(sys, "argv", ["agent-deck", "menubar", action]):
+                cli.main()
+            called.assert_called_once_with()
+
+
 @unittest.skipUnless(SWIFT_TESTS, "compiles the Swift app; runs in CI or with AGENT_DECK_SWIFT_TESTS=1")
 class SwiftAppTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
         cls.binary = Path(cls.temp.name) / "AgentDeckMenu"
-        subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-O", "-o", str(cls.binary), str(SWIFT_SOURCE)],
+        subprocess.run(["xcrun", "swiftc", *installer.SWIFT_FLAGS, "-o", str(cls.binary), str(installer.MENU_SOURCE)],
                        check=True, timeout=600)
 
     @classmethod
