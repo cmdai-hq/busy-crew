@@ -32,7 +32,10 @@ Sessions requiring interaction appear first. There is no custom display on the r
 
 ### Results and acknowledgment
 
-When an agent finishes a response while the monitor is running, its session shows a green `✓` until you acknowledge it. The check mark is kept across monitor restarts, so you don't miss a response that finished while you were away.
+When an agent finishes a response while the monitor is running, its session shows a green `✓`. The check mark is kept across monitor restarts, so you don't miss a response that finished while you were away. It clears when any of these happens:
+- you acknowledge it;
+- the session starts new work;
+- the session goes away: a closed Claude process, or an archived Codex conversation.
 
 A `✓` **counts toward its family's total.** For example, "Codex 5" can mean five finished conversations waiting for acknowledgment, with nothing working.
 
