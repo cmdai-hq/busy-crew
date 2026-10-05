@@ -17,8 +17,9 @@
   documentation. Adapter versions and limitations are listed in
   [COMPATIBILITY](docs/COMPATIBILITY.md).
 - Verify Claude process identity through libproc on macOS instead of forking `ps`
-  every poll; skip fsync for the per-poll status snapshot and rewrite `front.png`
-  only when the frame changes.
+  every poll, keeping `ps` as the fallback where libproc is unavailable; skip
+  fsync for the per-poll status snapshot and rewrite `front.png` only when the
+  frame changes.
 
 ## 0.1.0
 
