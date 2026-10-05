@@ -3,6 +3,7 @@ import io
 import json
 import os
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from contextlib import closing
@@ -10,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from agentdeck import hook
+from agentdeck import hook, observe
 from agentdeck.model import layout
 from agentdeck.observe import Observer, pid_matches, read_turn, rollout_state, readonly_db
 from agentdeck.storage import load_json, write_json
@@ -606,11 +607,30 @@ class LifecycleTests(unittest.TestCase):
                 connection.execute("SELECT 1")
 
     def test_pid_identity_rejects_bool_missing_birth_and_reuse(self):
-        for pid, born in [(True, "birth"), (123, None), (-1, "birth"), (0, "birth")]:
+        for pid, born in [(True, "birth"), (123, None), (-1, "birth"), (0, "birth"), (2**40, "birth")]:
             self.assertFalse(pid_matches(pid, born))
-        with patch("agentdeck.observe.os.kill"), patch("agentdeck.observe.subprocess.check_output", return_value=b"Thu Jan  1 00:00:02 1970\n"):
+        with patch("agentdeck.observe.process_birth", return_value=2):
             self.assertFalse(pid_matches(123, "Thu Jan 1 00:00:01 1970"))
             self.assertTrue(pid_matches(123, "Thu Jan 1 00:00:02 1970"))
+            self.assertFalse(pid_matches(123, "not a process start"))
+
+    def test_ps_fallback_reads_utc_birth_when_libproc_is_absent(self):
+        with patch("agentdeck.observe.LIBPROC", None), patch("agentdeck.observe.os.kill"), patch(
+                "agentdeck.observe.subprocess.check_output", return_value=b"Thu Jan  1 00:00:02 1970\n"):
+            self.assertFalse(pid_matches(123, "Thu Jan 1 00:00:01 1970"))
+            self.assertTrue(pid_matches(123, "Thu Jan 1 00:00:02 1970"))
+
+    @unittest.skipUnless(observe.LIBPROC, "libproc is macOS only")
+    def test_libproc_identifies_processes_without_forking(self):
+        started = subprocess.check_output(["/bin/ps", "-p", str(os.getpid()), "-o", "lstart="],
+                                          env={**os.environ, "TZ": "UTC", "LC_ALL": "C"}).decode()
+        child = subprocess.Popen(["/bin/sleep", "0"])
+        child.wait()
+        with patch("agentdeck.observe.subprocess.check_output", side_effect=AssertionError("forked ps")):
+            self.assertTrue(pid_matches(os.getpid(), started))
+            later = datetime.fromtimestamp(observe.process_started_at(started) + 1, timezone.utc)
+            self.assertFalse(pid_matches(os.getpid(), later.strftime("%a %b %d %H:%M:%S %Y")))
+            self.assertFalse(pid_matches(child.pid, started))
 
 
 if __name__ == "__main__":

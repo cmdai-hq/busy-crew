@@ -44,26 +44,32 @@ def read_json(path, default=None):
         return default
 
 
-def write_json(path, data):
-    write_bytes(path, json.dumps(data, ensure_ascii=False).encode())
+def write_json(path, data, durable=True):
+    write_bytes(path, json.dumps(data, ensure_ascii=False).encode(), durable)
 
 
-def write_bytes(path, data):
-    """Replace an application-owned file with private, complete contents."""
+def write_bytes(path, data, durable=True):
+    """Replace an application-owned file with private, complete contents.
+
+    Snapshots rewritten every poll skip fsync: the atomic rename already
+    prevents torn reads, and a crash only loses a value about to be replaced.
+    """
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
     try:
         with os.fdopen(fd, "wb") as output:
             output.write(data)
-            output.flush()
-            os.fsync(output.fileno())
+            if durable:
+                output.flush()
+                os.fsync(output.fileno())
         os.replace(temporary, path)
-        # The rename itself must survive a crash, not only the file contents.
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        if durable:
+            # The rename itself must survive a crash, not only the file contents.
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

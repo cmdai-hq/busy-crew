@@ -1,8 +1,11 @@
+import ctypes
 import json
 import math
 import os
 import sqlite3
+import struct
 import subprocess
+import sys
 import time
 from contextlib import closing
 from datetime import datetime, timezone
@@ -16,6 +19,8 @@ STATES = {"working", "waiting", "ready", "idle", "unknown"}
 MAX_ROLLOUT_SCAN = 32_000_000
 MAX_RECORD = 2_000_000
 CODEX_DATABASES = ("state_5.sqlite", "thread_history_1.sqlite")
+# xnu bsd/sys/proc_info.h: PROC_PIDTBSDINFO fills a 136-byte proc_bsdinfo.
+PROC_PIDTBSDINFO, BSDINFO_SIZE, BSDINFO_PID, BSDINFO_START = 3, 136, 12, 120
 
 
 def identifier(value):
@@ -53,14 +58,44 @@ def readonly_db(path):
     return connection
 
 
+def _libproc():
+    if sys.platform != "darwin":
+        return None
+    try:
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    except OSError:
+        return None
+    library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    library.proc_pidinfo.restype = ctypes.c_int
+    return library
+
+
+LIBPROC = _libproc()
+
+
+def process_birth(pid):
+    """UTC start second of a live process, queried without forking ps on macOS."""
+    if LIBPROC is None:
+        os.kill(pid, 0)
+        output = subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "lstart="],
+                                         env={**os.environ, "TZ": "UTC", "LC_ALL": "C"}, timeout=1)
+        return process_started_at(output.decode())
+    info = ctypes.create_string_buffer(BSDINFO_SIZE)
+    if LIBPROC.proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, info, BSDINFO_SIZE) != BSDINFO_SIZE:
+        raise OSError(ctypes.get_errno(), "Process information unavailable")
+    # The pid field guards against a changed proc_bsdinfo layout.
+    if struct.unpack_from("I", info, BSDINFO_PID)[0] != pid:
+        raise ValueError("Unexpected process information layout")
+    return struct.unpack_from("Q", info, BSDINFO_START)[0]
+
+
 def pid_matches(pid, started=None):
     try:
-        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1 or not isinstance(started, str) or not started:
+        if (isinstance(pid, bool) or not isinstance(pid, int) or not 1 < pid < 2**31
+                or not isinstance(started, str) or not started):
             return False
-        os.kill(pid, 0)
-        actual = subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "lstart="],
-                                         env={**os.environ, "TZ": "UTC", "LC_ALL": "C"}, timeout=1).decode().strip()
-        return " ".join(actual.split()) == " ".join(started.split())
+        expected = process_started_at(started)
+        return expected is not None and process_birth(pid) == expected
     except (OSError, ValueError, TypeError, OverflowError, UnicodeError, subprocess.SubprocessError):
         return False
 
