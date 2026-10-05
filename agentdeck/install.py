@@ -22,6 +22,7 @@ from .storage import claude_dir, codex_dir, load_json, state_dir, write_bytes
 LABEL = "local.busybar.agent-deck"
 MENU_LABEL = LABEL + ".menubar"
 MANIFEST = "installation.json"
+STOP_TIMEOUT = 15  # Seconds launchd may keep listing a job that is still exiting.
 MENU_SOURCE = Path(__file__).parent / "menubar" / "AgentDeckMenu.swift"
 # Swift 5 mode keeps older Command Line Tools able to build the app.
 SWIFT_FLAGS = ("-swift-version", "5", "-O")
@@ -381,8 +382,13 @@ def _loaded(launchctl, target):
 
 def _stop(launchctl, target):
     result = subprocess.run([launchctl, "bootout", target], capture_output=True, text=True, timeout=10)
-    if _loaded(launchctl, target):
-        raise RuntimeError(f"LaunchAgent did not stop (launchctl exit {result.returncode})")
+    # A successful bootout returns while the job's process is still exiting, and launchd
+    # keeps listing it meanwhile (~70 ms for the menu app). A failed bootout is final.
+    deadline = time.monotonic() + (STOP_TIMEOUT if result.returncode == 0 else 0)
+    while _loaded(launchctl, target):
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"LaunchAgent did not stop (launchctl exit {result.returncode})")
+        time.sleep(0.1)
 
 
 def _bootstrap(launchctl, domain, path, label=LABEL):

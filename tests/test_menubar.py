@@ -80,7 +80,7 @@ class FakeTools:
     """xcrun and launchctl, with launchd state kept per target."""
 
     def __init__(self):
-        self.loaded, self.calls = set(), []
+        self.loaded, self.calls, self.lingering, self.linger = set(), [], {}, 0
         self.compiler_missing = self.compile_fails = self.fail_bootstrap = self.stuck_bootout = False
 
     def run(self, args, **kwargs):
@@ -95,10 +95,18 @@ class FakeTools:
             return subprocess.CompletedProcess(args, 0, "", "")
         command = args[1]
         if command == "print":
+            if args[2] in self.lingering:  # launchd lists a job briefly after bootout returns.
+                self.lingering[args[2]] -= 1
+                if self.lingering[args[2]] < 0:
+                    del self.lingering[args[2]]
+                    self.loaded.discard(args[2])
             loaded = args[2] in self.loaded
             return subprocess.CompletedProcess(args, 0 if loaded else 113, "", "" if loaded else "Could not find service")
         if command == "bootout" and not self.stuck_bootout:
-            self.loaded.discard(args[2])
+            if self.linger:
+                self.lingering[args[2]] = self.linger
+            else:
+                self.loaded.discard(args[2])
         if command == "bootstrap":
             self.loaded.add(args[2] + "/" + plistlib.loads(Path(args[3]).read_bytes())["Label"])
             if self.fail_bootstrap:
@@ -123,6 +131,7 @@ class MenuBarInstallTests(unittest.TestCase):
         stack.enter_context(patch.object(installer.shutil, "which", return_value="/usr/bin/xcrun"))
         self.tools = FakeTools()
         stack.enter_context(patch.object(installer.subprocess, "run", side_effect=self.tools.run))
+        stack.enter_context(patch.object(installer, "STOP_TIMEOUT", 0.5))
         stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
         self.binary = self.runtime / "menubar" / "AgentDeckMenu"
         self.plist = installer.menubar_agent_path()
@@ -171,6 +180,12 @@ class MenuBarInstallTests(unittest.TestCase):
         self.assertEqual(self.installed(), before)
         self.assertIn(self.target, self.tools.loaded)
         self.assertFalse(self.binary.with_name("AgentDeckMenu.previous").exists())
+
+    def test_stop_waits_while_launchd_finishes_unloading(self):
+        installer.install_menubar()
+        self.tools.linger = 2  # Measured on macOS 27: still listed ~70 ms after bootout returns.
+        installer.install_menubar()
+        self.assertIn(self.target, self.tools.loaded)
 
     def test_failed_stop_keeps_the_installed_binary(self):
         installer.install_menubar()
