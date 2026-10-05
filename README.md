@@ -66,11 +66,13 @@ Backups and local files are kept in `~/Library/Application Support/BusybarAgentD
 
 | Control | Action |
 | --- | --- |
-| Start | Toggle between sessions and tokens |
-| Scroll wheel toward + / toward − | Tokens / sessions |
-| Back | Return to sessions |
-| OK | Acknowledge visible completion indicators; no acknowledgment from the tokens view |
+| **Start / Pause** button | Toggle between sessions and tokens; it never acknowledges |
+| Turn the scroll wheel toward + / toward − | Tokens / sessions |
+| **Press the scroll wheel** (the bar's OK / Skip) | Acknowledge visible completion indicators; no acknowledgment from the tokens view |
+| **Back** button | Return to sessions |
 | Selector set to Off or Settings | Pause the Agent Deck display |
+
+BUSY's documentation describes Start / Pause as "also OK", but the bar reports that button as `start`. Only a press on the scroll wheel reaches Agent Deck as OK.
 
 When interaction is required, the sessions view stays on screen even if the tokens view was selected. No button grants a permission or sends a reply to an agent.
 
@@ -126,7 +128,7 @@ The menu shows:
 - the reasons and the start time;
 - one session count line per agent family;
 - the actions:
-  - **Acknowledge results**: the same as the OK wheel press, enabled when there is something to acknowledge;
+  - **Acknowledge results**: the same as pressing the scroll wheel, enabled when there is something to acknowledge;
   - **Reload collector**: `launchctl kickstart -k`;
   - **Open log**.
 
