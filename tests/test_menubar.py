@@ -1,10 +1,18 @@
 """Menu bar status: health model, published status and the optional menu app."""
+import json
 import os
+import shutil
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
+import agentdeck
 from agentdeck.health import code_fingerprint, health
+
+SWIFT_SOURCE = Path(agentdeck.__file__).parent / "menubar" / "AgentDeckMenu.swift"
+SWIFT_TESTS = bool(shutil.which("xcrun") and (os.environ.get("CI") or os.environ.get("AGENT_DECK_SWIFT_TESTS")))
 
 STARTED = 1000.0
 
@@ -58,6 +66,44 @@ class FingerprintTests(unittest.TestCase):
             source.write_text("x = 22\n")
             os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
             self.assertNotEqual(code_fingerprint(root), second)
+
+
+@unittest.skipUnless(SWIFT_TESTS, "compiles the Swift app; runs in CI or with AGENT_DECK_SWIFT_TESTS=1")
+class SwiftAppTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.binary = Path(cls.temp.name) / "AgentDeckMenu"
+        subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-O", "-o", str(cls.binary), str(SWIFT_SOURCE)],
+                       check=True, timeout=600)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def level(self, content):
+        path = Path(self.temp.name) / "status.json"
+        path.unlink(missing_ok=True)
+        if content is not None:
+            path.write_text(content if isinstance(content, str) else json.dumps(content))
+        result = subprocess.run([str(self.binary), "--state", str(path)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def test_state_mode_levels(self):
+        now = time.time()
+        fresh = lambda level: {"at": now, "sessions": [], "health": {"level": level, "reasons": []}}
+        cases = [
+            (None, "stopped"), ("{not json", "stopped"),
+            ({"at": now - 30, "health": {"level": "ok", "reasons": []}}, "stopped"),
+            ({"at": now + 60, "health": {"level": "ok", "reasons": []}}, "stopped"),
+            (fresh("degraded"), "degraded"), (fresh("update"), "update"), (fresh("paused"), "paused"),
+            (fresh("ok"), "ok"), (fresh("from-a-newer-collector"), "degraded"),
+            ({"at": now, "sessions": []}, "ok"),  # A collector predating health reporting.
+        ]
+        for content, expected in cases:
+            with self.subTest(content=content):
+                self.assertEqual(self.level(content), expected)
 
 
 if __name__ == "__main__":
