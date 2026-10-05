@@ -111,6 +111,12 @@ class Service:
             self.paused = False
         self.last_control = command
 
+    def _fingerprint(self):
+        try:
+            return code_fingerprint(self.package_root)
+        except OSError:  # A reinstall can remove a directory mid-scan; retried next interval.
+            return None
+
     def usage_loop(self):
         while not self.stop.is_set():
             try:
@@ -211,7 +217,7 @@ class Service:
             LOG.info("Service started")
             last_frame, last_draw, last_error = None, 0, None
             started_at, code_changed, checked_at = time.time(), False, None
-            fingerprint = code_fingerprint(self.package_root)
+            fingerprint = self._fingerprint()
             while not self.stop.is_set():
                 self.read_commands(inbox)
                 self.sessions = self.observer.poll()
@@ -223,7 +229,11 @@ class Service:
                 if checked_at is None:
                     checked_at = now
                 elif not code_changed and now - checked_at >= 30:
-                    code_changed, checked_at = code_fingerprint(self.package_root) != fingerprint, now
+                    current, checked_at = self._fingerprint(), now
+                    if fingerprint is None:
+                        fingerprint = current
+                    elif current is not None:
+                        code_changed = current != fingerprint
                 device_error = None
                 try:
                     if self.paused:

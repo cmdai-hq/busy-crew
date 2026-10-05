@@ -545,7 +545,7 @@ def _deploy_menubar(launchctl, runtime, built):
     domain = "gui/" + str(os.getuid())
     target = domain + "/" + MENU_LABEL
     was_loaded = _loaded(launchctl, target)
-    changes, kept_previous = [], False
+    changes, kept_previous, swapped = [], False, False
     try:
         if was_loaded:
             _stop(launchctl, target)
@@ -554,6 +554,7 @@ def _deploy_menubar(launchctl, runtime, built):
             os.replace(binary, previous)
             kept_previous = True
         os.replace(built, binary)
+        swapped = True
         binary.chmod(0o700)
         _apply_plans([(path, plist_before, plistlib.dumps(agent))], runtime, changes)
         _bootstrap(launchctl, domain, path, MENU_LABEL)
@@ -565,7 +566,8 @@ def _deploy_menubar(launchctl, runtime, built):
         except Exception as stop_error:
             errors.append(str(stop_error))
         try:
-            binary.unlink(missing_ok=True)
+            if swapped:  # A failure before the swap leaves the installed binary in place.
+                binary.unlink(missing_ok=True)
             if kept_previous:
                 os.replace(previous, binary)
         except OSError as restore_error:

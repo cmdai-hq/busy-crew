@@ -38,12 +38,18 @@ struct Snapshot {
         guard let at = (status["at"] as? NSNumber)?.doubleValue, abs(now - at) <= staleAfter else {
             return .stopped("Collector not responding")
         }
-        var snapshot = Snapshot(level: "ok")
+        var snapshot = Snapshot()
         if let health = status["health"] as? [String: Any] {
             let level = health["level"] as? String ?? ""
             snapshot.level = levels.contains(level) ? level : "degraded"
             snapshot.reasons = health["reasons"] as? [String] ?? []
             if !levels.contains(level) { snapshot.reasons.append("Unknown collector state") }
+            snapshot.codeChanged = status["code_changed"] as? Bool ?? false
+        } else {
+            // Without health the running collector predates the code on disk: reloading fixes it.
+            snapshot.level = "update"
+            snapshot.reasons = ["Collector predates health reporting"]
+            snapshot.codeChanged = true
         }
         snapshot.startedAt = (status["started_at"] as? NSNumber)?.doubleValue
         snapshot.sessions = (status["sessions"] as? [[String: Any]] ?? []).compactMap { item in
@@ -52,7 +58,6 @@ struct Snapshot {
         }
         snapshot.tokensError = status["tokens_error"] is String
         snapshot.paused = status["paused"] as? Bool ?? false
-        snapshot.codeChanged = status["code_changed"] as? Bool ?? false
         return snapshot
     }
 

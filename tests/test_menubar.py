@@ -81,7 +81,7 @@ class FakeTools:
 
     def __init__(self):
         self.loaded, self.calls = set(), []
-        self.compiler_missing = self.compile_fails = self.fail_bootstrap = False
+        self.compiler_missing = self.compile_fails = self.fail_bootstrap = self.stuck_bootout = False
 
     def run(self, args, **kwargs):
         args = [str(arg) for arg in args]
@@ -97,7 +97,7 @@ class FakeTools:
         if command == "print":
             loaded = args[2] in self.loaded
             return subprocess.CompletedProcess(args, 0 if loaded else 113, "", "" if loaded else "Could not find service")
-        if command == "bootout":
+        if command == "bootout" and not self.stuck_bootout:
             self.loaded.discard(args[2])
         if command == "bootstrap":
             self.loaded.add(args[2] + "/" + plistlib.loads(Path(args[3]).read_bytes())["Label"])
@@ -172,6 +172,14 @@ class MenuBarInstallTests(unittest.TestCase):
         self.assertIn(self.target, self.tools.loaded)
         self.assertFalse(self.binary.with_name("AgentDeckMenu.previous").exists())
 
+    def test_failed_stop_keeps_the_installed_binary(self):
+        installer.install_menubar()
+        before = self.installed()
+        self.tools.stuck_bootout = True
+        with self.assertRaisesRegex(RuntimeError, "did not stop"):
+            installer.install_menubar()
+        self.assertEqual(self.installed(), before)
+
     def test_uninstall_menubar_removes_agent_plist_and_binary(self):
         installer.install_menubar()
         installer.uninstall_menubar()
@@ -226,7 +234,7 @@ class SwiftAppTests(unittest.TestCase):
             ({"at": now + 60, "health": {"level": "ok", "reasons": []}}, "stopped"),
             (fresh("degraded"), "degraded"), (fresh("update"), "update"), (fresh("paused"), "paused"),
             (fresh("ok"), "ok"), (fresh("from-a-newer-collector"), "degraded"),
-            ({"at": now, "sessions": []}, "ok"),  # A collector predating health reporting.
+            ({"at": now, "sessions": []}, "update"),  # A collector predating health reporting.
         ]
         for content, expected in cases:
             with self.subTest(content=content):

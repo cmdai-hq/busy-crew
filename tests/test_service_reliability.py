@@ -388,6 +388,24 @@ class ServiceReliabilityTests(unittest.TestCase):
         self.assertIs(writes[1]["code_changed"], True)
         self.assertEqual(writes[1]["health"]["level"], "update")
 
+    def test_fingerprint_failures_never_stop_the_collector(self):
+        class Immediate(threading.Event):
+            def wait(self, timeout=None):
+                return super().wait(0)
+        self.service.stop = Immediate()
+        self.service.device.draw.side_effect = lambda frame: (
+            self.service.stop.set() if self.service.device.draw.call_count == 2 else None)
+        # A reinstall can remove a directory while rglob walks it.
+        failures = [FileNotFoundError("vanished"), FileNotFoundError("vanished")]
+        clock, writes = iter([0, 31]), []
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.time.monotonic", side_effect=lambda: next(clock, 31)
+        ), patch("agentdeck.service.code_fingerprint", side_effect=failures), patch(
+            "agentdeck.service.write_json", side_effect=lambda path, data, **_: writes.append(data)
+        ):
+            self.service.run()
+        self.assertEqual([status["code_changed"] for status in writes], [False, False])
+
     def test_setup_failure_still_clears_and_releases_instance_lock(self):
         with patch("agentdeck.service.signal.signal", side_effect=RuntimeError("fixture")):
             with self.assertRaises(RuntimeError):

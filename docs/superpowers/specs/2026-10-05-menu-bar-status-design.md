@@ -26,7 +26,9 @@ service (Python, every 1 s) ──► status.json ──► menu app (Swift, eve
 
 - **Health is computed in Python** (`agentdeck/health.py`) and written to `status.json` each
   poll, so the existing unittest suite covers it. The Swift app only derives one thing itself:
-  *stopped*, meaning `status.json` is missing, unreadable, invalid, or older than 10 s.
+  *stopped*, meaning `status.json` is missing, unreadable, invalid, or older than 10 s. A fresh
+  `status.json` without `health` comes from a collector that predates this feature. It reads
+  as *update*, with the reason `Collector predates health reporting` (final review ruling).
 - **The menu app polls; it does not watch.** `status.json` is atomically replaced every second.
   A file watch would therefore fire every second and need re-arming on each new inode. A 5 s
   timer with 1 s tolerance reading 1.5 KB is cheaper, and 5 s is fresh enough for health.

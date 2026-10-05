@@ -118,7 +118,7 @@ uv run agent-deck menubar uninstall
 | --- | --- |
 | `xmark.circle` | Stopped: no fresh `status.json` (missing, invalid, or older than 10 s) |
 | `exclamationmark.triangle` | Degraded: the bar is unreachable, a source cannot be read, or the bar's buttons are disconnected |
-| `arrow.clockwise.circle` | Update available: the collector's code changed on disk since it started |
+| `arrow.clockwise.circle` | Update available: the collector's code changed on disk since it started, or the running collector predates health reporting |
 | `pause.circle` | Paused by the bar's selector |
 | The bar in outline with its LEDs | Running |
 
