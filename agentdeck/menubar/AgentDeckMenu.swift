@@ -10,8 +10,9 @@ let pollInterval: TimeInterval = 5
 let levels: Set<String> = ["degraded", "update", "paused", "ok"]
 let levelTitles = ["stopped": "Stopped", "degraded": "Degraded", "update": "Update available",
                    "paused": "Paused", "ok": "Running"]
+// Problems change the icon's shape so they stand out; "ok" is the drawn bar below.
 let levelSymbols = ["stopped": "xmark.circle", "degraded": "exclamationmark.triangle",
-                    "update": "arrow.clockwise.circle", "paused": "pause.circle", "ok": "rectangle.split.3x1"]
+                    "update": "arrow.clockwise.circle", "paused": "pause.circle"]
 let stateOrder: [(state: String, label: String)] = [("waiting", "waiting"), ("working", "working"),
                                                      ("ready", "✓"), ("unknown", "?"), ("idle", "idle")]
 
@@ -65,6 +66,48 @@ struct Snapshot {
     }
 }
 
+/// The BUSY Bar in outline with two rows of LEDs: recognizable at menu bar size.
+func barImage() -> NSImage {
+    let image = NSImage(size: NSSize(width: 22, height: 12), flipped: false) { rect in
+        NSColor.black.set()
+        let body = NSBezierPath(roundedRect: rect.insetBy(dx: 0.65, dy: 0.65), xRadius: 3, yRadius: 3)
+        body.lineWidth = 1.3  // Matches SF Symbols' regular stroke.
+        body.stroke()
+        for row in 0..<2 {
+            for column in 0..<6 {
+                let led = NSRect(x: 3.4 + Double(column) * 2.75, y: 3.1 + Double(row) * 3.2, width: 1.8, height: 1.8)
+                NSBezierPath(ovalIn: led).fill()
+            }
+        }
+        return true
+    }
+    image.isTemplate = true
+    return image
+}
+
+func icon(for level: String) -> NSImage? {
+    if level == "ok" { return barImage() }
+    let image = NSImage(systemSymbolName: levelSymbols[level] ?? "questionmark.circle", accessibilityDescription: nil)
+    image?.isTemplate = true
+    return image
+}
+
+/// Renders an icon at 2x for `--icon` previews and tests.
+func writePNG(_ image: NSImage, to url: URL) -> Bool {
+    let size = image.size
+    guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2),
+                                        pixelsHigh: Int(size.height * 2), bitsPerSample: 8, samplesPerPixel: 4,
+                                        hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                        bytesPerRow: 0, bitsPerPixel: 0) else { return false }
+    bitmap.size = size
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+    image.draw(in: NSRect(origin: .zero, size: size))
+    NSGraphicsContext.restoreGraphicsState()
+    guard let data = bitmap.representation(using: .png, properties: [:]) else { return false }
+    return (try? data.write(to: url)) != nil
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let environment = ProcessInfo.processInfo.environment
     lazy var stateDir = URL(fileURLWithPath: environment["AGENT_DECK_STATE"]
@@ -94,9 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func refresh() {
         snapshot = Snapshot.load(stateDir.appendingPathComponent("status.json"), now: Date().timeIntervalSince1970)
         let title = "Agent Deck: " + (levelTitles[snapshot.level] ?? snapshot.level)
-        if let image = NSImage(systemSymbolName: levelSymbols[snapshot.level] ?? "questionmark.circle",
-                               accessibilityDescription: title) {
-            image.isTemplate = true
+        if let image = icon(for: snapshot.level) {
             statusItem.button?.image = image
             statusItem.button?.title = ""
         } else {
@@ -104,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             statusItem.button?.title = "AD"
         }
         statusItem.button?.toolTip = title
+        statusItem.button?.setAccessibilityLabel(title)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -196,6 +238,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 let arguments = CommandLine.arguments
 if arguments.count == 3 && arguments[1] == "--state" {
     print(Snapshot.load(URL(fileURLWithPath: arguments[2]), now: Date().timeIntervalSince1970).level)
+    exit(0)
+}
+if arguments.count == 4 && arguments[1] == "--icon" {
+    guard let image = icon(for: arguments[2]), writePNG(image, to: URL(fileURLWithPath: arguments[3])) else { exit(1) }
     exit(0)
 }
 let app = NSApplication.shared

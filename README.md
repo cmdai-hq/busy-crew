@@ -114,13 +114,13 @@ uv run agent-deck menubar uninstall
 
 `menubar install` compiles a small AppKit app (`agentdeck/menubar/AgentDeckMenu.swift`) into the private runtime folder. It then starts the app with its own LaunchAgent (`local.busybar.agent-deck.menubar`) at login. A failed compile or start leaves any previous version in place. `agent-deck uninstall` also removes the icon.
 
-| Icon (SF Symbol) | Meaning |
+| Icon | Meaning |
 | --- | --- |
 | `xmark.circle` | Stopped: no fresh `status.json` (missing, invalid, or older than 10 s) |
 | `exclamationmark.triangle` | Degraded: the bar is unreachable, a source cannot be read, or the bar's buttons are disconnected |
 | `arrow.clockwise.circle` | Update available: the collector's code changed on disk since it started |
 | `pause.circle` | Paused by the bar's selector |
-| `rectangle.split.3x1` | Running |
+| The bar in outline with its LEDs | Running |
 
 The menu shows:
 - the reasons and the start time;

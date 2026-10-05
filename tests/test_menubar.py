@@ -232,6 +232,19 @@ class SwiftAppTests(unittest.TestCase):
             with self.subTest(content=content):
                 self.assertEqual(self.level(content), expected)
 
+    def test_running_icon_is_a_drawn_bar_not_a_generic_symbol(self):
+        from PIL import Image
+        icons = {}
+        for level in ["ok", "stopped"]:
+            path = Path(self.temp.name) / (level + ".png")
+            result = subprocess.run([str(self.binary), "--icon", level, str(path)], capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            icons[level] = Image.open(path).convert("RGBA")
+        # 22 x 12 pt at 2x: a wide bar shape, unlike the square SF Symbols of problem states.
+        self.assertEqual(icons["ok"].size, (44, 24))
+        self.assertNotEqual(icons["stopped"].size, (44, 24))
+        self.assertIsNotNone(icons["ok"].getbbox())
+
 
 if __name__ == "__main__":
     unittest.main()

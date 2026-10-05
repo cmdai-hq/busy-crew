@@ -73,7 +73,7 @@ shows it as a note.
   | `degraded` | `exclamationmark.triangle` |
   | `update` | `arrow.clockwise.circle` |
   | `paused` | `pause.circle` |
-  | `ok` | `rectangle.split.3x1` (evokes the bar) |
+  | `ok` | drawn bar outline with two rows of LEDs (22×12 pt template image; `rectangle.split.3x1` read as a generic layout icon) |
 
 - **Menu:**
   - a title line `Agent Deck — <level text>`, followed by one disabled line per reason, a
