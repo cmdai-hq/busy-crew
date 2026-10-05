@@ -1,10 +1,31 @@
 name: Test
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.11', '3.14']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: astral-sh/setup-uv@v10.2.0
-      - run: uv sync --locked --python 3.11
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: uv sync --locked --python '${{ matrix.python }}'
       - run: uv run python -m unittest discover -s tests -v
+      - name: Build and smoke test the installed wheel outside the repository
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
+        shell: bash
+        run: |
+          uv build
+          uv venv "$RUNNER_TEMP/agent-deck-wheel" --python 3.11
+          uv pip install --python "$RUNNER_TEMP/agent-deck-wheel/bin/python" dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/agent-deck-wheel/bin/agent-deck" --help
+          "$RUNNER_TEMP/agent-deck-wheel/bin/agent-deck" demo "$RUNNER_TEMP/agent-deck-demo"
+          "$RUNNER_TEMP/agent-deck-wheel/bin/python" -I "$GITHUB_WORKSPACE/tests/wheel_smoke.py"

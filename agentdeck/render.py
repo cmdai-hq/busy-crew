@@ -20,6 +20,8 @@ FONT = {
     "8": ["111", "101", "111", "101", "111"], "9": ["111", "101", "111", "001", "111"],
     "+": ["000", "010", "111", "010", "000"], "?": ["111", "001", "010", "000", "010"],
     "K": ["101", "101", "110", "101", "101"], "M": ["101", "111", "111", "101", "101"],
+    "G": ["111", "100", "101", "101", "111"], "T": ["111", "010", "010", "010", "010"],
+    "z": ["11", "01", "10", "11"],
     ".": ["0", "0", "0", "0", "1"], "-": ["000", "000", "111", "000", "000"],
 }
 MARKS = {"working": ["110", "110", "001"], "waiting": ["010", "010", "000", "010"],
@@ -51,7 +53,10 @@ class Frame:
                                 self.dot(x + dx * scale + a, y + dy * scale + b, color)
             x += (len(glyph[0]) + 1) * scale
 
-    def mark(self, state, provider, x, y):
+    def mark(self, state, provider, x, y, sleeping=False):
+        if sleeping:
+            self.text("zzz", x, y, "d")
+            return
         color = {"waiting": "y", "ready": "g", "idle": "d", "unknown": "d"}.get(state)
         self.sprite(MARKS[state], x, y, color or ("c" if provider == "claude" else "B"))
 
@@ -87,14 +92,46 @@ def number(n):
 def compact(n):
     if n is None:
         return "?"
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M" if n < 100_000_000 else f"{n // 1_000_000}M"
+    if type(n) is not int or n < 0:
+        return "?"
+    for unit, divisor in [("T", 10**12), ("G", 10**9), ("M", 10**6)]:
+        if n >= divisor:
+            if n >= 1000 * divisor and unit == "T":
+                return "999T+"
+            if n < 100 * divisor:
+                # Integer rounding also handles counts larger than float's range.
+                tenths = (n * 10 + divisor // 2) // divisor
+                return f"{tenths // 10}.{tenths % 10}{unit}"
+            return f"{n // divisor}{unit}"
     return f"{n // 1000}K" if n >= 1000 else str(n)
+
+
+def ordered_sessions(sessions):
+    return sorted(sessions, key=lambda s: (ORDER[s.state], s.id))
+
+
+def visible_sessions(sessions, view="sessions", errors=()):
+    """Results represented by tiles, state dots or an aggregate completion."""
+    if view == "tokens" and not any(s.state == "waiting" for s in sessions):
+        return []
+    mode, provider = layout(sessions, errors)
+    if mode == "team":
+        group = ordered_sessions([s for s in sessions if s.provider == provider])
+        return group[:5 if len(group) > 6 else 6]
+    visible = []
+    for name in ["claude", "codex"]:
+        group = ordered_sessions([s for s in sessions if s.provider == name])
+        # A green aggregate and the total represent all this family's results;
+        # otherwise only the four individual state dots expose completions.
+        visible.extend(group if name not in errors and aggregate(group) == "ready" else group[:4])
+    return visible
 
 
 def render(sessions, view="sessions", tokens=None, phase=0, errors=()):
     frame = Frame()
-    mode, provider = layout(sessions)
+    mode, provider = layout(sessions, errors)
+    claude = [s for s in sessions if s.provider == "claude"]
+    sleeping = bool(claude) and "claude" not in errors and all(s.state == "idle" for s in claude)
     # Required input always takes precedence over the optional token view.
     if view == "tokens" and not any(s.state == "waiting" for s in sessions):
         for name, x in [("claude", 2), ("codex", 39)]:
@@ -105,38 +142,37 @@ def render(sessions, view="sessions", tokens=None, phase=0, errors=()):
     elif mode == "duo":
         for name, x in [("claude", 0), ("codex", 37)]:
             group = [s for s in sessions if s.provider == name]
-            count = len([s for s in group if s.state != "idle"])
+            count = len(group)
             sprite = CLAWD if name == "claude" else CODEX
             frame.sprite(sprite, x + 2, 3 if name == "claude" else 0,
-                         "c" if name == "claude" else None, dim=not count)
-            label = number(count)
+                         "c" if name == "claude" else None,
+                         dim=all(s.state in {"idle", "unknown"} for s in group))
+            label = "?" if name in errors else number(count)
             frame.text(label, x + (19 if len(label) == 1 else 16), 3, scale=2 if len(label) == 1 else 1)
-            frame.mark(aggregate(group), name, x + 28, 3)
-            for i, session in enumerate(sorted(group, key=lambda s: ORDER[s.state])[:4]):
+            state = "unknown" if name in errors else aggregate(group)
+            is_sleeping = sleeping and name == "claude"
+            frame.mark(state, name, x + (27 if is_sleeping else 28), 3, sleeping=is_sleeping)
+            for i, session in enumerate(ordered_sessions(group)[:4]):
                 color = {"waiting": "y", "ready": "g", "idle": "d", "unknown": "d"}.get(session.state, "c" if name == "claude" else "B")
                 frame.dot(x + 17 + i * 4, 14, color); frame.dot(x + 18 + i * 4, 14, color)
         for y in [4, 7, 10]: frame.dot(35, y, "d")
     else:
-        group = sorted([s for s in sessions if s.provider == provider], key=lambda s: (ORDER[s.state], s.id))
-        active = [s for s in group if s.state != "idle"] or group
+        group = ordered_sessions([s for s in sessions if s.provider == provider])
         # Six tiles maximum. The last becomes a numeric overflow tile, never a fake agent.
-        overflow = len(active) > 6
-        visible = active[:5 if overflow else 6]
+        overflow = len(group) > 6
+        visible = group[:5 if overflow else 6]
         count = len(visible)
         xs = [2 + i * 12 for i in range(6)] if overflow else [int(36 - (count * 12)/2 + i*12 + 1) for i in range(count)]
         for x, session in zip(xs, visible):
             frame.sprite(MINI_CLAWD if provider == "claude" else MINI_CODEX, x, 7 if provider == "claude" else 5,
                          "c" if provider == "claude" else None, dim=session.state in {"idle", "unknown"})
-            frame.mark(session.state, provider, x + 3, 0)
+            frame.mark(session.state, provider, x if sleeping else x + 3, 0, sleeping=sleeping)
             if session.state == "working":
                 frame.dot(x + 3 + phase * 2, 15, "c" if provider == "claude" else "B")
         if overflow:
-            hidden = active[5:]
+            hidden = group[5:]
             frame.text("+", 62, 2, "y" if any(s.state == "waiting" for s in hidden) else "w")
             frame.text(number(len(hidden)), 60, 9)
-        # Completion from the other provider remains a small green notification.
-        if any(s.provider != provider and s.state == "ready" for s in sessions):
-            frame.sprite(MARKS["ready"], 68, 0, "g")
     if errors:
         frame.text("?", 69, 11, "d")
     return frame

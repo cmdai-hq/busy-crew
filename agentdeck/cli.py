@@ -1,20 +1,47 @@
 import argparse
 import json
 import logging
+import math
 import time
 import uuid
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from .storage import read_json, state_dir, write_json
+from .storage import load_json, state_dir, write_json
+
+
+def current_status(runtime):
+    try:
+        state = load_json(runtime / "status.json", {})
+    except (OSError, ValueError):
+        raise SystemExit("Service status is invalid; check the service log") from None
+    stamp = state.get("at")
+    if (isinstance(stamp, bool) or not isinstance(stamp, (int, float))
+            or not math.isfinite(stamp) or not 0 <= time.time() - stamp <= 5):
+        raise SystemExit("Service is not running")
+    sessions = state.get("sessions")
+    if (not isinstance(sessions, list) or not all(
+            isinstance(s, dict) and isinstance(s.get("provider"), str)
+            and s["provider"] in {"claude", "codex"}
+            and isinstance(s.get("state"), str)
+            and s["state"] in {"working", "waiting", "ready", "idle", "unknown"}
+            for s in sessions)):
+        raise SystemExit("Service status is invalid; check the service log")
+    return state
 
 
 def main():
     parser = argparse.ArgumentParser(description="Claude / Codex on the BUSY Bar front display")
+    try:
+        package_version = version("busybar-agent-deck")
+    except PackageNotFoundError:
+        package_version = "development"
+    parser.add_argument("--version", action="version", version="%(prog)s " + package_version)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("run")
     install = sub.add_parser("install")
-    install.add_argument("--address", default="http://10.0.4.20")
-    install.add_argument("--timezone", default="Europe/Paris")
+    install.add_argument("--address", help="BUSY Bar URL; preserve existing address on reinstall")
+    install.add_argument("--timezone", help="IANA time zone; preserve existing zone on reinstall")
     install.add_argument("--no-claude-hooks", action="store_true")
     sub.add_parser("uninstall")
     sub.add_parser("status")
@@ -25,9 +52,21 @@ def main():
     demo = sub.add_parser("demo"); demo.add_argument("directory", type=Path)
     args = parser.parse_args()
     if args.command == "run":
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-        from .service import Service
-        Service().run()
+        from .service import Service, configure_logging
+        runtime = state_dir()
+        handler = configure_logging(runtime)
+        try:
+            Service().run()
+        except Exception as exc:
+            if handler not in logging.getLogger("agentdeck").handlers:
+                handler = configure_logging(runtime)
+            logging.getLogger("agentdeck").error("Service failed: %s", type(exc).__name__)
+            raise SystemExit("Service failed; check the private service.log") from None
+        finally:
+            logger = logging.getLogger("agentdeck")
+            if handler in logger.handlers:
+                logger.removeHandler(handler)
+                handler.close()
     elif args.command == "install":
         from .install import install
         install(args.address, args.timezone, not args.no_claude_hooks)
@@ -35,23 +74,25 @@ def main():
         from .install import uninstall
         uninstall()
     elif args.command == "status":
-        state = read_json(state_dir() / "status.json", {})
-        if not state or time.time() - state.get("at", 0) > 5:
-            raise SystemExit("Service is not running")
+        state = current_status(state_dir())
         # CLI output intentionally omits session IDs.
         state["sessions"] = [{"provider": s["provider"], "state": s["state"]} for s in state["sessions"]]
         print(json.dumps(state, indent=2))
     elif args.command in {"view", "ack"}:
-        state = read_json(state_dir() / "status.json", {})
-        if not state or time.time() - state.get("at", 0) > 5:
-            raise SystemExit("Service is not running")
-        write_json(state_dir() / "inbox" / (str(uuid.uuid4()) + ".json"),
+        runtime = state_dir()
+        current_status(runtime)
+        if sum(1 for _ in (runtime / "inbox").glob("*.json")) >= 128:
+            raise SystemExit("Command queue is full; retry after the service catches up")
+        write_json(runtime / "inbox" / (str(uuid.uuid4()) + ".json"),
                    {"command": args.name if args.command == "view" else "ack"})
     elif args.command == "snapshot":
         from .device import Device
         from PIL import Image, ImageDraw
-        config = read_json(state_dir() / "config.json", {})
-        rgb = Device(config.get("address", "http://10.0.4.20"), config.get("token")).screen()
+        try:
+            config = load_json(state_dir() / "config.json", {})
+        except (OSError, ValueError):
+            raise SystemExit("Configuration is invalid; check config.json") from None
+        rgb = Device(config.get("address", "http://busybar.local"), config.get("token")).screen()
         image = Image.frombytes("RGB", (72, 16), rgb)
         if args.leds:
             result = Image.new("RGB", (1008, 224), "#070b10")
@@ -71,6 +112,7 @@ def main():
             "duo": [("claude", "working")] * 3 + [("claude", "waiting"), ("codex", "working"), ("codex", "ready")],
             "claude-team": [("claude", "working")] * 3 + [("claude", "waiting"), ("claude", "ready")],
             "codex-team": [("codex", "working")] * 3 + [("codex", "waiting"), ("codex", "ready")],
+            "idle-duo": [("claude", "idle"), ("codex", "working")],
         }
         for name, items in cases.items():
             sessions = [Session(provider, str(i), state, "demo") for i, (provider, state) in enumerate(items)]

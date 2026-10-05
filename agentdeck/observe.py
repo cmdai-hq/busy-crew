@@ -1,201 +1,492 @@
 import json
+import math
 import os
 import sqlite3
 import subprocess
 import time
+from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 
+from .hook import valid_snapshot
 from .model import Session
-from .storage import read_json
+from .storage import claude_dir, codex_dir, load_json, write_json
+
+STATES = {"working", "waiting", "ready", "idle", "unknown"}
+MAX_ROLLOUT_SCAN = 32_000_000
+MAX_RECORD = 2_000_000
+CODEX_DATABASES = ("state_5.sqlite", "thread_history_1.sqlite")
+
+
+def identifier(value):
+    if not isinstance(value, str) or not 0 < len(value) <= 200 or any(ord(c) < 32 for c in value):
+        raise ValueError("Invalid session/turn identifier")
+    return value
+
+
+def timestamp(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError("Invalid timestamp")
+    try:
+        if not math.isfinite(value):
+            raise ValueError("Invalid timestamp")
+    except OverflowError as exc:
+        raise ValueError("Invalid timestamp") from exc
+    return value
+
+
+def process_started_at(value):
+    try:
+        return datetime.strptime(" ".join(value.split()), "%a %b %d %H:%M:%S %Y").replace(tzinfo=timezone.utc).timestamp()
+    except (AttributeError, ValueError):
+        return None
 
 
 def readonly_db(path):
     connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.3)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA query_only=ON")
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+    except Exception:
+        connection.close()
+        raise
     return connection
 
 
 def pid_matches(pid, started=None):
     try:
-        if int(pid) <= 1:
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1 or not isinstance(started, str) or not started:
             return False
-        os.kill(int(pid), 0)
-        if started:
-            # Claude stores procStart with UTC ps output, regardless of macOS timezone.
-            actual = subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "lstart="],
-                                             env={**os.environ, "TZ": "UTC"}, timeout=1).decode().strip()
-            return " ".join(actual.split()) == " ".join(str(started).split())
-        return True
-    except (OSError, ValueError, subprocess.SubprocessError):
+        os.kill(pid, 0)
+        actual = subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "lstart="],
+                                         env={**os.environ, "TZ": "UTC", "LC_ALL": "C"}, timeout=1).decode().strip()
+        return " ".join(actual.split()) == " ".join(started.split())
+    except (OSError, ValueError, TypeError, OverflowError, UnicodeError, subprocess.SubprocessError):
         return False
 
 
-def read_tail(path, size=2_000_000):
+def record_json(line):
+    if len(line) > MAX_RECORD:
+        raise ValueError("Rollout record exceeds size limit")
+    try:
+        record = json.loads(line)
+    except RecursionError as exc:
+        raise ValueError("Rollout nesting exceeds parser limit") from exc
+    if not isinstance(record, dict) or not isinstance(record.get("payload", {}), dict):
+        raise ValueError("Invalid rollout record")
+    return record
+
+
+def read_turn(path, turn_id):
+    """Read backwards to a verified selected-turn boundary, with explicit limits."""
+    records, buffer, terminated = [], b"", False
     with path.open("rb") as handle:
-        total = handle.seek(0, 2)
-        handle.seek(max(0, total - size))
-        if total > size:
-            handle.readline()  # skip a possibly partial first record
-        for line in handle:
-            try:
-                yield json.loads(line)
-            except (ValueError, UnicodeError):
-                continue
+        position = handle.seek(0, 2)
+        floor = max(0, position - MAX_ROLLOUT_SCAN)
+        while position > floor:
+            length = min(65536, position - floor)
+            position -= length
+            handle.seek(position)
+            buffer = handle.read(length) + buffer
+            if not terminated:
+                # Codex may still be appending the last record: parse only complete lines.
+                end = buffer.rfind(b"\n")
+                if end < 0:
+                    buffer = b""
+                    continue
+                buffer, terminated = buffer[:end], True
+            lines = buffer.split(b"\n")
+            buffer = lines.pop(0)
+            for line in reversed(lines):
+                if not line:
+                    continue
+                record = record_json(line)
+                records.append(record)
+                payload = record.get("payload", {})
+                if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
+                    return list(reversed(records))
+            if len(buffer) > MAX_RECORD:
+                raise ValueError("Rollout record exceeds size limit")
+        if floor == 0 and buffer:
+            record = record_json(buffer)
+            records.append(record)
+            payload = record.get("payload", {})
+            if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
+                return list(reversed(records))
+    raise ValueError("Selected turn boundary unavailable")
 
 
-def rollout_state(records, turn_id):
-    """Only inspect the selected root turn; async questions do not block work."""
-    current = None
-    completed = False
-    pending = set()
-    explicit_wait = False
+def rollout_details(records, turn_id):
+    current, terminal, completed_at = None, None, 0
+    pending, explicit_wait, boundary, superseded = set(), False, False, False
     for record in records:
+        if not isinstance(record, dict) or not isinstance(record.get("payload", {}), dict):
+            raise ValueError("Invalid rollout record")
         payload = record.get("payload", {})
         kind = payload.get("type")
         if record.get("type") == "event_msg":
-            if kind == "task_started":
-                current = payload.get("turn_id")
-            if kind == "task_complete" and payload.get("turn_id") == turn_id:
-                completed = True
-            if current == turn_id:
+            if kind in {"task_started", "turn_started"}:
+                current = identifier(payload.get("turn_id"))
+                root = payload.get("root_turn_id")
+                if root is not None:
+                    identifier(root)
+                if boundary and current != turn_id and root in {None, current}:
+                    superseded = True
+                boundary |= current == turn_id
+            if kind in {"task_complete", "turn_complete", "turn_aborted"} and payload.get("turn_id") == turn_id:
+                terminal = "aborted" if kind == "turn_aborted" else ("failed" if payload.get("error") else "completed")
+                completed_at = timestamp(payload.get("completed_at") or 0)
+                pending.clear()
+                explicit_wait = False
+            if current == turn_id and terminal is None:
                 if kind in {"approval_request", "request_user_input"}:
                     explicit_wait = True
                 elif kind in {"approval_response", "user_message"}:
                     explicit_wait = False
                 elif kind == "thread_status_changed":
                     flags = payload.get("active_flags", [])
+                    if not isinstance(flags, list) or not all(isinstance(flag, str) for flag in flags):
+                        raise ValueError("Invalid active flags")
                     explicit_wait = bool(set(flags) & {"waitingOnApproval", "waitingOnUserInput"})
-        elif current == turn_id and record.get("type") == "response_item":
+        elif current == turn_id and terminal is None and record.get("type") == "response_item":
             if kind == "function_call" and payload.get("name") in {"request_user_input", "mcp__request_user_input"}:
-                pending.add(payload.get("call_id"))
+                pending.add(identifier(payload.get("call_id")))
             elif kind == "function_call_output":
                 pending.discard(payload.get("call_id"))
-    return completed, bool(pending or explicit_wait)
+    return {"terminal": terminal, "waiting": bool(pending or explicit_wait),
+            "completed_at": completed_at, "boundary": boundary, "superseded": superseded}
+
+
+def rollout_state(records, turn_id):
+    details = rollout_details(records, turn_id)
+    return (False, False) if details["superseded"] else (details["terminal"] == "completed", details["waiting"])
 
 
 class Observer:
-    def __init__(self, runtime, home=None, clock=time.time, alive=pid_matches):
-        self.runtime = runtime
+    def __init__(self, runtime, home=None, clock=time.time, alive=pid_matches, claude_root=None, codex_root=None):
+        self.runtime = Path(runtime)
         self.home = home or Path.home()
-        self.clock = clock
-        self.alive = alive
-        self.started = clock()
-        self.previous = {}
-        self.ready = {}
-        self.acks = read_json(runtime / "acknowledged.json", {})
-        self.tail_cache = {}
-        self.errors = []
+        self.claude_root = Path(claude_root) if claude_root is not None else claude_dir(self.home)
+        self.codex_root = Path(codex_root) if codex_root is not None else codex_dir(self.home)
+        self.clock, self.alive, self.started = clock, alive, clock()
+        self.previous, self.instances, self.tail_cache = {}, {}, {}
+        self.errors, self.state_errors = [], set()  # Ledgers that could not be read intact.
+        self.acks = self._load_state("acknowledged.json")
+        self.results = self._load_state("completions.json")
+        self.results_dirty = False
+        for key, version in list(self.acks.items()):
+            try:
+                self._state_key(key)
+                identifier(version)
+            except ValueError:
+                self.state_errors.add("acknowledged.json")
+                self.acks.pop(key)
+        for key, result in list(self.results.items()):
+            try:
+                self._state_key(key)
+                if not isinstance(result, dict):
+                    raise ValueError("Invalid pending result")
+                identifier(result.get("version"))
+                timestamp(result.get("completed_at"))
+                if result.get("instance") is not None:
+                    identifier(result["instance"])
+                if self.acks.get(key) == result["version"]:
+                    self.results.pop(key)
+                    self.results_dirty = True
+            except ValueError:
+                self.state_errors.add("completions.json")
+                self.results.pop(key)
+        self.ready = {key: result["version"] for key, result in self.results.items()}
+        # A Codex home alone (e.g. CLI-only) does not establish the desktop databases.
+        self.known_sources = {"claude": (self.claude_root / "sessions").exists(),
+                              "codex": all((self.codex_root / name).exists() for name in CODEX_DATABASES)}
+
+    @staticmethod
+    def _state_key(key):
+        provider, separator, sid = key.partition(":")
+        if provider not in {"claude", "codex"} or not separator:
+            raise ValueError("Invalid persisted provider")
+        identifier(sid)
+
+    def _load_state(self, name):
+        try:
+            return load_json(self.runtime / name, {})
+        except (OSError, ValueError):
+            self.state_errors.add(name)
+            return {}
+
+    def _error(self, provider):
+        if provider not in self.errors:
+            self.errors.append(provider)
+
+    def _save_results(self):
+        self.results_dirty = True
+        write_json(self.runtime / "completions.json", self.results)
+        self.results_dirty = False
+        self.state_errors.discard("completions.json")
+
+    def _save_acks(self, acks):
+        write_json(self.runtime / "acknowledged.json", acks)
+        self.acks = acks
+        self.state_errors.discard("acknowledged.json")
+
+    def _forget(self, key):
+        changed = self.results.pop(key, None) is not None
+        self.ready.pop(key, None)
+        self.previous.pop(key, None)
+        self.instances.pop(key, None)
+        if self.acks.pop(key, None) is not None:
+            self._save_acks(self.acks)
+        if changed:
+            self._save_results()
 
     def acknowledge(self, sessions):
-        from .storage import write_json
+        acknowledgements, keys = dict(self.acks), []
         for session in sessions:
-            if session.state == "ready":
-                self.acks[session.provider + ":" + session.id] = session.version
-        write_json(self.runtime / "acknowledged.json", self.acks)
+            key = session.provider + ":" + session.id
+            if session.state == "ready" and self.ready.get(key) == session.version:
+                acknowledgements[key] = session.version
+                keys.append(key)
+        if keys:
+            self._save_acks(acknowledgements)
+            for key in keys:
+                self.results.pop(key, None)
+                self.ready.pop(key, None)
+            self._save_results()
 
-    def completion(self, provider, sid, state, version, completed_at=0):
+    def completion(self, provider, sid, state, version, completed_at=0, instance=None):
         key = provider + ":" + sid
         previous = self.previous.get(key)
-        if state in {"working", "waiting"}:
-            self.ready.pop(key, None)
-        elif state in {"ready", "idle"}:
-            if (previous and previous[0] in {"working", "waiting"}) or completed_at >= self.started:
-                self.ready[key] = version
-            if key in self.ready and self.acks.get(key) != self.ready[key]:
-                state = "ready"
-                version = self.ready[key]
-            elif state == "ready":
+        result = self.results.get(key)
+        if result and instance is not None and result.get("instance") != instance:
+            self._forget(key)
+            result, previous = None, None
+        if state in {"working", "waiting", "unknown"}:
+            if result:
+                self.results.pop(key)
+                self.ready.pop(key, None)
+                self._save_results()
+        elif state == "ready":
+            fresh = completed_at >= self.started or (previous and previous[0] in {"working", "waiting"} and previous[1] == version)
+            if result or fresh:
+                if self.acks.get(key) != version:
+                    new_result = {"version": version, "completed_at": completed_at, "instance": instance}
+                    if result != new_result:
+                        self.results[key] = new_result
+                        self.ready[key] = version
+                        self._save_results()
+                    state = "ready"
+                else:
+                    state = "idle"
+            else:
                 state = "idle"
+        elif state == "idle" and result and self.acks.get(key) != result["version"]:
+            state, version = "ready", result["version"]
         self.previous[key] = (state, version)
         return Session(provider, sid, state, version)
 
-    def claude(self):
+    def _files(self, path, provider):
+        if not path.exists():
+            if self.known_sources[provider] or any(key.startswith(provider + ":") for key in self.results):
+                raise ValueError("Previously available source is absent")
+            return []
+        self.known_sources[provider] = True
+        if not path.is_dir():
+            raise ValueError("Source directory incompatible")
+        return sorted(p for p in path.iterdir() if p.suffix == ".json")
+
+    def _hooks(self):
         hooks = {}
-        for path in (self.runtime / "hooks").glob("*.json"):
-            data = read_json(path, {})
-            if data.get("id"):
-                hooks[data["id"]] = data
-        result = []
-        # Native registry is authoritative for identity and lifetime: dead PIDs never count.
-        for path in (self.home / ".claude/sessions").glob("*.json"):
-            data = read_json(path, {})
-            sid = data.get("sessionId")
-            if not sid or data.get("kind") not in {None, "interactive", "headless"}:
+        directory = self.runtime / "hooks"
+        if not directory.exists():
+            return hooks
+        for path in sorted(directory.iterdir()):
+            if path.suffix != ".json":
                 continue
-            if not self.alive(data.get("pid", -1), data.get("procStart")):
-                continue
-            native_at = data.get("statusUpdatedAt", data.get("updatedAt", 0)) / 1000
-            state = {"busy": "working", "idle": "idle", "waiting": "waiting", "needs_input": "waiting"}.get(data.get("status"), "unknown")
-            version = str(native_at)
-            hook = hooks.get(sid, {})
-            if hook.get("at", 0) >= native_at and self.clock() - hook.get("at", 0) < 24 * 3600:
-                if hook.get("state") == "closed":
+            try:
+                data = load_json(path)
+                if data is None:  # A concurrent hook cleanup removed the listed file.
                     continue
-                state = hook.get("state", state)
-                version = str(hook["at"])
-            result.append(self.completion("claude", sid, state, version,
-                                          hook.get("at", 0) if state == "ready" else 0))
+                sid = identifier(data.get("id"))
+                timestamp(data.get("at"))
+                if data.get("state") not in STATES | {"closed"}:
+                    raise ValueError("Invalid hook state")
+                if data.get("schema") == 2 and not valid_snapshot(data):
+                    raise ValueError("Invalid hook snapshot")
+                if data.get("schema") == 2 and data.get("turn"):
+                    identifier(data["turn"])
+                elif data.get("schema") is None:
+                    data = {key: data[key] for key in ("id", "state", "at")}
+                elif data.get("schema") != 2:
+                    raise ValueError("Unsupported hook schema")
+                hooks[sid] = data
+            except (OSError, ValueError, TypeError):
+                self._error("claude")
+        return hooks
+
+    def claude(self):
+        hooks, result, seen = self._hooks(), [], set()
+        files = self._files(self.claude_root / "sessions", "claude")
+        for path in files:
+            try:
+                data = load_json(path)
+                if data is None:  # Native session cleanup raced directory enumeration.
+                    continue
+                sid = identifier(data.get("sessionId"))
+                key = "claude:" + sid
+                seen.add(key)
+                if data.get("kind") not in {None, "interactive", "headless"}:
+                    self._forget(key)
+                    continue
+                pid, started = data.get("pid"), data.get("procStart")
+                if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
+                    raise ValueError("Invalid native PID")
+                if self.alive is pid_matches and (not isinstance(started, str) or not started):
+                    raise ValueError("Native process birth unavailable")
+                if not self.alive(pid, started):
+                    self._forget(key)
+                    continue
+                instance = str(pid) + ":" + str(started or "")
+                old_instance = self.instances.get(key) or self.results.get(key, {}).get("instance")
+                changed_instance = old_instance is not None and old_instance != instance
+                if changed_instance:
+                    self._forget(key)
+                self.instances[key] = instance
+                native_at = timestamp(data.get("statusUpdatedAt", data.get("updatedAt", 0))) / 1000
+                state = {"busy": "working", "idle": "idle", "waiting": "waiting", "needs_input": "waiting"}.get(data.get("status"), "unknown")
+                version, completed_at = "native:" + str(native_at), 0
+                hook = hooks.get(sid, {})
+                hook_at = hook.get("at", 0)
+                born = process_started_at(started)
+                instance_valid = hook_at >= born if born is not None else (not changed_instance or hook_at >= native_at)
+                if 0 <= self.clock() - hook_at < 86400 and instance_valid:
+                    if hook.get("state") == "closed" and hook_at >= native_at:
+                        self._forget(key)
+                        continue
+                    if hook.get("turn"):
+                        version = hook["turn"] + ":" + str(hook.get("generation", 0))
+                    pending = hook.get("pending", {})
+                    active_pending = [item for item in pending.values() if
+                                      (state == "working" and (item["kind"] != "permission" or item["at"] >= native_at)) or
+                                      item["at"] >= native_at]
+                    terminal = hook.get("terminal")
+                    if any(item.get("ambiguous") and item["at"] >= native_at for item in pending.values()):
+                        state = "unknown"
+                    elif active_pending:
+                        state = "waiting"
+                    elif terminal and terminal["outcome"] == "failed":
+                        state = "unknown"
+                    elif state == "idle" and terminal and native_at >= hook.get("turn_started_at", 0):
+                        state, version, completed_at = "ready", terminal["version"], terminal["at"]
+                    elif hook.get("schema") != 2 and hook_at >= native_at:
+                        # Legacy hook snapshots remain readable while new hooks load.
+                        candidate = hook.get("state", state)
+                        if candidate in {"waiting", "unknown"}:
+                            state = candidate
+                        elif candidate == "ready" and state == "idle":
+                            state, version, completed_at = "ready", "legacy-stop:" + str(hook_at), hook_at
+                    elif state == "idle" and hook.get("turn_started_at", 0) > native_at and hook.get("state") == "working":
+                        state = "working"
+                result.append(self.completion("claude", sid, state, version, completed_at, instance))
+            except (OSError, ValueError, TypeError):
+                self._error("claude")
+        # An invalid file may conceal an existing session; retain its ledger for recovery.
+        if "claude" not in self.errors:
+            for key in list(set(self.previous) | set(self.results) | set(self.acks)):
+                if key.startswith("claude:") and key not in seen:
+                    self._forget(key)
         return result
 
     def codex(self):
-        root = self.home / ".codex"
-        state_db, history_db = root / "state_5.sqlite", root / "thread_history_1.sqlite"
+        state_db, history_db = (self.codex_root / name for name in CODEX_DATABASES)
         if not state_db.exists() or not history_db.exists():
+            if self.known_sources["codex"] or any(key.startswith("codex:") for key in self.results):
+                raise ValueError("Codex databases unavailable or incompatible")
             return []
-        result = []
-        now = self.clock()
-        with readonly_db(state_db) as state, readonly_db(history_db) as history:
+        self.known_sources["codex"] = True
+        result, now, seen = [], self.clock(), set()
+        with closing(readonly_db(state_db)) as state, closing(readonly_db(history_db)) as history:
+            # Pending completions stay eligible until acknowledged or their thread is removed.
             threads = state.execute("""SELECT id, rollout_path, updated_at FROM threads
                 WHERE archived=0 AND agent_path IS NULL AND thread_source='user'
                 AND updated_at > ? ORDER BY updated_at DESC LIMIT 200""", (now - 86400,)).fetchall()
+            threads = list(threads)
+            ids = {row["id"] for row in threads}
+            retained = set(self.results) | set(self.acks)
+            # Check saved identities in bounded batches; acknowledgements survive the
+            # recent-thread window, but not an explicitly removed/archived thread.
+            old = [key for key in retained if key.startswith("codex:") and key[6:] not in ids]
+            for offset in range(0, len(old), 200):
+                keys = old[offset:offset + 200]
+                placeholders = ",".join("?" for _ in keys)
+                rows = state.execute(f"""SELECT id, rollout_path, updated_at FROM threads WHERE id IN ({placeholders})
+                    AND archived=0 AND agent_path IS NULL AND thread_source='user'""", [key[6:] for key in keys]).fetchall()
+                eligible = {row["id"]: row for row in rows}
+                for key in keys:
+                    sid = key[6:]
+                    if sid not in eligible:
+                        self._forget(key)
+                    elif key in self.results:
+                        threads.append(eligible[sid])
             for thread in threads:
-                turn = history.execute("""SELECT * FROM thread_turns WHERE thread_id=?
-                    ORDER BY rollout_ordinal DESC LIMIT 1""", (thread["id"],)).fetchone()
-                if turn is None:
-                    continue
-                sid, version = thread["id"], turn["turn_id"]
-                status = turn["status"]
-                path = Path(thread["rollout_path"])
-                completed, waiting = False, False
-                if path.exists():
-                    stat = path.stat()
-                    key = (stat.st_mtime_ns, stat.st_size, version)
-                    cached = self.tail_cache.get(sid)
-                    if not cached or cached[0] != key:
-                        cached = (key, rollout_state(read_tail(path), version))
-                        self.tail_cache[sid] = cached
-                    completed, waiting = cached[1]
-                    freshness = max(stat.st_mtime, thread["updated_at"])
-                else:
-                    freshness = thread["updated_at"]
-                if status == "inProgress" and not completed:
-                    # Old dangling turns exist in real Codex databases; never call them running.
-                    if now - freshness > 900:
+                sid = None
+                try:
+                    sid = identifier(thread["id"])
+                    seen.add(sid)
+                    turn = history.execute("SELECT * FROM thread_turns WHERE thread_id=? ORDER BY rollout_ordinal DESC LIMIT 1", (sid,)).fetchone()
+                    if turn is None:
+                        if "codex:" + sid in self.results:
+                            raise ValueError("Previously observed turn unavailable")
                         continue
-                    state_name = "waiting" if waiting else "working"
-                elif status == "completed" or completed:
-                    state_name = "ready"
-                else:
-                    continue
-                completed_at = turn["completed_at"] or 0
-                if isinstance(completed_at, str):
-                    try:
+                    version, status = identifier(turn["turn_id"]), turn["status"]
+                    completed_at = turn["completed_at"] or 0
+                    if isinstance(completed_at, str):
                         completed_at = float(completed_at)
-                    except ValueError:
-                        completed_at = 0
-                session = self.completion("codex", sid, state_name, version, completed_at)
-                if session.state != "idle":
-                    result.append(session)
+                    completed_at = timestamp(completed_at)
+                    if not isinstance(thread["rollout_path"], str):
+                        raise ValueError("Invalid rollout path")
+                    path = Path(thread["rollout_path"])
+                    stat = path.stat()
+                    cache_key = (str(path.resolve()), stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size, version)
+                    cached = self.tail_cache.get(sid)
+                    if not cached or cached[0] != cache_key:
+                        cached = (cache_key, rollout_details(read_turn(path, version), version))
+                        self.tail_cache[sid] = cached
+                    details = cached[1]
+                    completed_at = details["completed_at"] or completed_at
+                    if details["superseded"] or details["terminal"] in {"failed", "aborted"} or status in {"failed", "interrupted", "cancelled", "canceled"}:
+                        state_name = "unknown"
+                    elif details["terminal"] == "completed" or status == "completed":
+                        state_name = "ready"
+                    elif status == "inProgress":
+                        freshness = max(stat.st_mtime, timestamp(thread["updated_at"]))
+                        if now - freshness > 900:
+                            continue
+                        state_name = "waiting" if details["waiting"] else "working"
+                    else:
+                        state_name = "unknown"
+                    session = self.completion("codex", sid, state_name, version, completed_at)
+                    if session.state != "idle":
+                        result.append(session)
+                except (OSError, ValueError, TypeError, sqlite3.Error):
+                    self._error("codex")
+            for sid in set(self.tail_cache) - seen:
+                self.tail_cache.pop(sid, None)
+            for key in list(self.previous):
+                if key.startswith("codex:") and key[6:] not in seen:
+                    self.previous.pop(key, None)
         return result
 
     def poll(self):
-        sessions, self.errors = [], []
-        for name, collect in [("claude", self.claude), ("codex", self.codex)]:
+        sessions, self.errors = [], ["state"] if self.state_errors else []
+        if self.results_dirty:
+            try:
+                self._save_results()
+            except (OSError, ValueError):
+                self._error("state")
+        for provider, collect in [("claude", self.claude), ("codex", self.codex)]:
             try:
                 sessions.extend(collect())
             except (OSError, ValueError, TypeError, sqlite3.Error):
-                self.errors.append(name)
-                # A failed source yields an explicit unknown marker, not a false zero.
-                sessions.append(Session(name, "source-unavailable", "unknown", "error"))
+                self._error(provider)
         return sessions
