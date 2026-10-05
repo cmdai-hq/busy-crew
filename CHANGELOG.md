@@ -22,6 +22,10 @@
   frame changes.
 - Center the Codex character on Clawd in the duo view and keep its face visible
   when dimmed.
+- Add an optional macOS menu bar icon (`agent-deck menubar install`) showing the
+  collector's health (stopped, degraded, update available, paused), with
+  acknowledge, reload and open-log actions. The collector publishes `health`,
+  `code_changed`, `pid` and `started_at` in `status.json`.
 
 ## 0.1.0
 
