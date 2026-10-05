@@ -44,7 +44,7 @@ To acknowledge, use any of these:
 - choose **Acknowledge results** in the [menu bar icon](#menu-bar-status-optional);
 - run `uv run agent-deck ack`.
 
-Only the results the bar is showing are acknowledged. Nothing is acknowledged from the tokens view.
+Only the results the bar is showing are acknowledged, so nothing is acknowledged while it shows token totals. A session that needs you brings the sessions view back even when tokens are selected, and the results then on screen can be acknowledged.
 
 | Result | After acknowledgment |
 | --- | --- |
