@@ -221,12 +221,14 @@ class Service:
                             self.device.clear()
                             last_frame = None
                     else:
-                        if xpm != last_frame or now - last_draw >= 5:
+                        changed = xpm != last_frame
+                        if changed or now - last_draw >= 5:
                             drawn_at = time.time()
                             self.device.draw(frame)
                             self.presented_until = drawn_at + 15
                             last_frame, last_draw = xpm, now
-                            frame.save(self.runtime / "front.png")
+                            if changed:  # A lease renewal resends the same pixels.
+                                frame.save(self.runtime / "front.png")
                         self.presented_sessions = visible_sessions(self.sessions, self.view, self.observer.errors)
                 except Exception as exc:
                     device_error = type(exc).__name__
@@ -245,7 +247,7 @@ class Service:
                     "source_errors": self.observer.errors, "device_error": device_error,
                     "inputs_connected": self.inputs_connected, "paused": self.paused,
                     "inputs_error": self.inputs_error,
-                    "events_dropped": self.events_dropped, "last_control": self.last_control})
+                    "events_dropped": self.events_dropped, "last_control": self.last_control}, durable=False)
                 self.stop.wait(1)
         finally:
             self.stop.set()

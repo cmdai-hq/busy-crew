@@ -21,6 +21,7 @@ from agentdeck.device import APPLICATION, MAX_RESPONSE_BYTES, Device
 from agentdeck.model import Session
 from agentdeck.render import Frame, compact, render, visible_sessions
 from agentdeck.service import MAX_COMMANDS_PER_POLL, MAX_EVENTS, MAX_INBOX_FILES, Service, configure_logging
+from agentdeck.storage import load_json, write_json
 from agentdeck.usage import Usage, UsageSnapshot, parse_usage, usage_output
 
 DAY = "2026-10-04"
@@ -307,13 +308,45 @@ class ServiceReliabilityTests(unittest.TestCase):
         with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
             "agentdeck.usage.today", return_value=DAY
         ), patch("agentdeck.usage.time.time", return_value=1001), patch(
-            "agentdeck.service.write_json", side_effect=lambda path, data: writes.append(data)
+            "agentdeck.service.write_json", side_effect=lambda path, data, **_: writes.append(data)
         ):
             self.service.run()
         self.assertEqual(writes[0]["tokens"], {"claude": 10})
         self.assertEqual(writes[0]["tokens_at"], 1000)
         self.assertIsNone(writes[0]["tokens_error"])
         self.assertEqual(self.service.presented_sessions, [])
+
+    def test_only_snapshot_writes_skip_fsync(self):
+        with patch("agentdeck.storage.os.fsync") as fsync:
+            write_json(self.runtime / "snapshot.json", {"a": 1}, durable=False)
+            fsync.assert_not_called()
+            write_json(self.runtime / "ledger.json", {"b": 1})
+        self.assertEqual(fsync.call_count, 2)
+        self.assertEqual(load_json(self.runtime / "snapshot.json"), {"a": 1})
+
+    def test_status_snapshots_are_replaced_without_disk_flushes(self):
+        self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.storage.os.fsync"
+        ) as fsync, patch("agentdeck.service.write_json", wraps=write_json) as write:
+            self.service.run()
+        self.assertTrue(any(call.args[0].name == "status.json" for call in write.call_args_list))
+        fsync.assert_not_called()
+
+    def test_lease_renewal_redraws_without_rewriting_front_png(self):
+        class Immediate(threading.Event):
+            def wait(self, timeout=None):
+                return super().wait(0)
+        self.service.stop = Immediate()
+        self.service.device.draw.side_effect = lambda frame: (
+            self.service.stop.set() if self.service.device.draw.call_count == 2 else None)
+        clock = iter([0, 10])
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.time.monotonic", side_effect=lambda: next(clock, 10)
+        ), patch("agentdeck.render.Frame.save") as save:
+            self.service.run()
+        self.assertEqual(self.service.device.draw.call_count, 2)
+        save.assert_called_once()
 
     def test_setup_failure_still_clears_and_releases_instance_lock(self):
         with patch("agentdeck.service.signal.signal", side_effect=RuntimeError("fixture")):
