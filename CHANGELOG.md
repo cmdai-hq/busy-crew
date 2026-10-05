@@ -20,6 +20,8 @@
   every poll, keeping `ps` as the fallback where libproc is unavailable; skip
   fsync for the per-poll status snapshot and rewrite `front.png` only when the
   frame changes.
+- Center the Codex character on Clawd in the duo view and keep its face visible
+  when dimmed.
 
 ## 0.1.0
 

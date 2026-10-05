@@ -12,6 +12,8 @@ CODEX = ["000BB0BB00000", "00BBBBBBBBB00", "0BBBBBBBBBBB0", "BBBvvvvvvvBBB",
          "00BBBBBBBBB00", "000BBBCBBB000", "000sBBBBBs000", "000BB000BB000", "000ss000ss000"]
 MINI_CODEX = ["00BB0BB00", "0BBBBBBB0", "BBBvvvBBB", "BBvCvCvBB", "BBvvvvvBB",
               "0BBBBBBB0", "00BBCBB00", "00BBBBB00", "00ss0ss00"]
+# Dimming paints sprites gray; Codex's painted visor becomes a hole so its eyes stay visible.
+DIM = {"v": "."}
 FONT = {
     "0": ["111", "101", "101", "101", "111"], "1": ["010", "110", "010", "010", "111"],
     "2": ["111", "001", "111", "100", "111"], "3": ["111", "001", "111", "001", "111"],
@@ -40,7 +42,7 @@ class Frame:
         for dy, row in enumerate(rows):
             for dx, value in enumerate(row):
                 if value != "0":
-                    self.dot(x + dx, y + dy, "d" if dim else (color or value))
+                    self.dot(x + dx, y + dy, DIM.get(value, "d") if dim else (color or value))
 
     def text(self, text, x, y, color="w", scale=1):
         for ch in text:
@@ -144,7 +146,8 @@ def render(sessions, view="sessions", tokens=None, phase=0, errors=()):
             group = [s for s in sessions if s.provider == name]
             count = len(group)
             sprite = CLAWD if name == "claude" else CODEX
-            frame.sprite(sprite, x + 2, 3 if name == "claude" else 0,
+            # Centered vertically on each other: Clawd 3–11, the taller Codex 1–13.
+            frame.sprite(sprite, x + 2, 3 if name == "claude" else 1,
                          "c" if name == "claude" else None,
                          dim=all(s.state in {"idle", "unknown"} for s in group))
             label = "?" if name in errors else number(count)

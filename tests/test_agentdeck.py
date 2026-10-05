@@ -10,7 +10,7 @@ from unittest.mock import patch
 from agentdeck.hook import hook_state, update_snapshot
 from agentdeck.model import Session, layout
 from agentdeck.observe import Observer, pid_matches, rollout_state
-from agentdeck.render import CLAWD, MINI_CLAWD, Frame, PALETTE, compact, render
+from agentdeck.render import CLAWD, CODEX, MINI_CLAWD, MINI_CODEX, Frame, PALETTE, compact, render
 from agentdeck.storage import write_json
 from agentdeck.usage import Usage, parse_usage
 
@@ -31,6 +31,16 @@ def claude_duo_crop(state):
 
 
 class RenderingTests(unittest.TestCase):
+    def test_dimmed_codex_keeps_a_visible_face(self):
+        for sprite in [CODEX, MINI_CODEX]:
+            frame = Frame()
+            frame.sprite(sprite, 0, 0, dim=True)
+            colors = {(x, y): frame.rows[y][x] for y, row in enumerate(sprite) for x, v in enumerate(row)}
+            eyes = {colors[p] for p, v in zip(colors, "".join(sprite)) if v == "C"}
+            visor = {colors[p] for p, v in zip(colors, "".join(sprite)) if v == "v"}
+            self.assertTrue(eyes.isdisjoint(visor), sprite)
+            self.assertTrue({colors[p] for p, v in zip(colors, "".join(sprite)) if v != "0"} <= {"d", "."})
+
     def test_single_provider_uses_entire_team(self):
         for provider in ["claude", "codex"]:
             self.assertEqual(layout([session(provider)]), ("team", provider))
