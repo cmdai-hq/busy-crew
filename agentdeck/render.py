@@ -2,18 +2,19 @@
 from .model import ORDER, aggregate, layout
 
 PALETTE = {".": "#000000", "c": "#dc866b", "B": "#7895ff", "s": "#4669c9",
-           "v": "#192b50", "C": "#8cf1e9", "y": "#ffcb64", "g": "#87dd9b",
-           "d": "#65717e", "w": "#dfe9ee"}
+           "v": "#192b50", "C": "#8cf1e9", "m": "#8cf1e9", "y": "#ffcb64",
+           "g": "#87dd9b", "d": "#65717e", "w": "#dfe9ee"}
 CLAWD = ["0011111111100", "0011111111100", "0011011101100", "1111011101111",
          "1111111111111", "0011111111100", "0011111111100", "0001100011000", "0001000001000"]
 MINI_CLAWD = ["011111110", "011111110", "110111011", "110111011", "111111111", "011111110", "010101010"]
 CODEX = ["000BB0BB00000", "00BBBBBBBBB00", "0BBBBBBBBBBB0", "BBBvvvvvvvBBB",
          "BBvvvvvvvvvBB", "BBvvCvvvCvvBB", "BBvvCvvvCvvBB", "0BBvvvvvvvBB0",
-         "00BBBBBBBBB00", "000BBBCBBB000", "000sBBBBBs000", "000BB000BB000", "000ss000ss000"]
+         "00BBBBBBBBB00", "000BBBmBBB000", "000sBBBBBs000", "000BB000BB000", "000ss000ss000"]
 MINI_CODEX = ["00BB0BB00", "0BBBBBBB0", "BBBvvvBBB", "BBvCvCvBB", "BBvvvvvBB",
-              "0BBBBBBB0", "00BBCBB00", "00BBBBB00", "00ss0ss00"]
-# Dimming paints sprites gray; Codex's painted visor becomes a hole so its eyes stay visible.
-DIM = {"v": "."}
+              "0BBBBBBB0", "00BBmBB00", "00BBBBB00", "00ss0ss00"]
+# Dimming paints sprites gray. Codex's painted visor and mouth ("m", cyan like the
+# eyes when lit) become holes, so the eyes stand out on the visor and the mouth on the body.
+DIM = {"v": ".", "m": "."}
 FONT = {
     "0": ["111", "101", "101", "101", "111"], "1": ["010", "110", "010", "010", "111"],
     "2": ["111", "001", "111", "100", "111"], "3": ["111", "001", "111", "001", "111"],

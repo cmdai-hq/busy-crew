@@ -35,11 +35,17 @@ class RenderingTests(unittest.TestCase):
         for sprite in [CODEX, MINI_CODEX]:
             frame = Frame()
             frame.sprite(sprite, 0, 0, dim=True)
-            colors = {(x, y): frame.rows[y][x] for y, row in enumerate(sprite) for x, v in enumerate(row)}
-            eyes = {colors[p] for p, v in zip(colors, "".join(sprite)) if v == "C"}
-            visor = {colors[p] for p, v in zip(colors, "".join(sprite)) if v == "v"}
-            self.assertTrue(eyes.isdisjoint(visor), sprite)
-            self.assertTrue({colors[p] for p, v in zip(colors, "".join(sprite)) if v != "0"} <= {"d", "."})
+            dimmed = {}
+            for y, row in enumerate(sprite):
+                for x, value in enumerate(row):
+                    dimmed.setdefault(value, set()).add(frame.rows[y][x])
+            # Each feature must contrast with what surrounds it: eyes on the visor, mouth on the body.
+            self.assertTrue(dimmed["C"].isdisjoint(dimmed["v"]), sprite)
+            self.assertTrue(dimmed["m"].isdisjoint(dimmed["B"]), sprite)
+            self.assertTrue(set().union(*(c for v, c in dimmed.items() if v != "0")) <= {"d", "."})
+
+    def test_codex_mouth_keeps_its_color_when_lit(self):
+        self.assertEqual(PALETTE["m"], PALETTE["C"])
 
     def test_single_provider_uses_entire_team(self):
         for provider in ["claude", "codex"]:
