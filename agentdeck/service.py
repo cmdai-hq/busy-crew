@@ -269,7 +269,9 @@ class Service:
                     "inputs_connected": self.inputs_connected, "paused": self.paused,
                     "inputs_error": self.inputs_error,
                     "events_dropped": self.events_dropped, "last_control": self.last_control,
-                    "pid": os.getpid(), "started_at": started_at, "code_changed": code_changed}
+                    "pid": os.getpid(), "started_at": started_at, "code_changed": code_changed,
+                    # What OK would acknowledge now, so the menu never offers a silent no-op.
+                    "acknowledgeable": sum(s.state == "ready" for s in self.presented_sessions)}
                 status["health"] = health(status, time.time(), started_at)
                 write_json(self.runtime / "status.json", status, durable=False)
                 self.stop.wait(1)

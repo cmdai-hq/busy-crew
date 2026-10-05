@@ -406,6 +406,20 @@ class ServiceReliabilityTests(unittest.TestCase):
             self.service.run()
         self.assertEqual([status["code_changed"] for status in writes], [False, False])
 
+    def test_status_counts_only_results_the_bar_can_acknowledge(self):
+        # OK acknowledges what the bar shows: nothing from the tokens view.
+        self.service.observer = SimpleNamespace(poll=lambda: [session()], errors=[], acknowledge=MagicMock())
+        counts = {}
+        for view in ["sessions", "tokens"]:
+            self.service.view, self.service.stop, writes = view, threading.Event(), []
+            self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+            with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+                "agentdeck.service.write_json", side_effect=lambda path, data, **_: writes.append(data)
+            ):
+                self.service.run()
+            counts[view] = writes[0]["acknowledgeable"]
+        self.assertEqual(counts, {"sessions": 1, "tokens": 0})
+
     def test_setup_failure_still_clears_and_releases_instance_lock(self):
         with patch("agentdeck.service.signal.signal", side_effect=RuntimeError("fixture")):
             with self.assertRaises(RuntimeError):

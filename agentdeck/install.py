@@ -573,7 +573,8 @@ def _deploy_menubar(launchctl, runtime, built):
         except OSError as restore_error:
             errors.append(str(restore_error))
         errors.extend(_rollback(changes))
-        if was_loaded and not errors:
+        # Without its former plist there is nothing to restart, as in install().
+        if was_loaded and plist_before is not None and not errors:
             try:
                 _bootstrap(launchctl, domain, path, MENU_LABEL)
             except Exception as restart_error:

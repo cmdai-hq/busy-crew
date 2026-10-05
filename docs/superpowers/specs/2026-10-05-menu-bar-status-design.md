@@ -82,8 +82,9 @@ shows it as a note.
     `Started <relative time>` line, and the token note when relevant;
   - one count line per agent family, for example `Claude: 3 working · 1 ✓`;
   - when `code_changed`, the item `New version on disk — Reload collector`;
-  - the actions `Acknowledge results` (enabled only when the service runs, is not paused and
-    has a `ready` session), `Reload collector` and `Open log`;
+  - the actions `Acknowledge results` (enabled only when the collector publishes
+    `acknowledgeable > 0`, the number of results OK would acknowledge on the bar right now),
+    `Reload collector` and `Open log`;
   - `Quit menu icon` at the end.
 - **Actions** run asynchronously. A non-zero exit adds a `Last action failed: <name>` line
   until the next successful action.

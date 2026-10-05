@@ -22,8 +22,8 @@ struct Snapshot {
     var startedAt: Double?
     var sessions: [(provider: String, state: String)] = []
     var tokensError = false
-    var paused = false
     var codeChanged = false
+    var acknowledgeable = 0
 
     static func stopped(_ reason: String) -> Snapshot {
         Snapshot(reasons: [reason])
@@ -57,7 +57,7 @@ struct Snapshot {
             return (provider, state)
         }
         snapshot.tokensError = status["tokens_error"] is String
-        snapshot.paused = status["paused"] as? Bool ?? false
+        snapshot.acknowledgeable = (status["acknowledgeable"] as? NSNumber)?.intValue ?? 0
         return snapshot
     }
 
@@ -69,6 +69,44 @@ struct Snapshot {
         }
         return parts.isEmpty ? "none" : parts.joined(separator: " · ")
     }
+}
+
+struct Entry {
+    var title = ""
+    var action: Selector?
+    var enabled = false
+    var isSeparator = false
+    static let separator = Entry(isSeparator: true)
+}
+
+/// The whole menu as data, shared by the status item and the headless `--menu` mode.
+func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date) -> [Entry] {
+    var entries = [Entry(title: "Agent Deck — " + (levelTitles[snapshot.level] ?? snapshot.level))]
+    entries += snapshot.reasons.map { Entry(title: "  " + $0) }
+    if let startedAt = snapshot.startedAt, snapshot.level != "stopped" {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "en")
+        let started = Date(timeIntervalSince1970: startedAt)
+        entries.append(Entry(title: "Started " + formatter.localizedString(for: started, relativeTo: now)))
+    }
+    if snapshot.tokensError { entries.append(Entry(title: "Token counts unavailable")) }
+    if snapshot.level != "stopped" {
+        entries += [.separator, Entry(title: "Claude: " + snapshot.summary("claude")),
+                    Entry(title: "Codex: " + snapshot.summary("codex"))]
+    }
+    entries.append(.separator)
+    if snapshot.codeChanged {
+        entries.append(Entry(title: "New version on disk — Reload collector", action: #selector(AppDelegate.reload),
+                             enabled: true))
+    }
+    // The collector publishes what OK would acknowledge on the bar right now.
+    entries.append(Entry(title: "Acknowledge results", action: #selector(AppDelegate.acknowledge),
+                         enabled: snapshot.level != "stopped" && snapshot.acknowledgeable > 0))
+    entries.append(Entry(title: "Reload collector", action: #selector(AppDelegate.reload), enabled: true))
+    entries.append(Entry(title: "Open log", action: #selector(AppDelegate.openLog), enabled: true))
+    if let lastError = lastError { entries.append(Entry(title: lastError)) }
+    entries += [.separator, Entry(title: "Quit menu icon", action: #selector(AppDelegate.quit), enabled: true)]
+    return entries
 }
 
 /// The BUSY Bar in outline with two rows of LEDs: recognizable at menu bar size.
@@ -156,45 +194,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         refresh()
         menu.removeAllItems()
-        menu.addItem(label("Agent Deck — " + (levelTitles[snapshot.level] ?? snapshot.level)))
-        snapshot.reasons.forEach { menu.addItem(label("  " + $0)) }
-        if let startedAt = snapshot.startedAt, snapshot.level != "stopped" {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.locale = Locale(identifier: "en")
-            let started = Date(timeIntervalSince1970: startedAt)
-            menu.addItem(label("Started " + formatter.localizedString(for: started, relativeTo: Date())))
+        for entry in menuEntries(snapshot, lastError: lastError, now: Date()) {
+            if entry.isSeparator {
+                menu.addItem(.separator())
+                continue
+            }
+            let item = NSMenuItem(title: entry.title, action: entry.action, keyEquivalent: "")
+            item.target = entry.action == nil ? nil : self
+            item.isEnabled = entry.enabled
+            menu.addItem(item)
         }
-        if snapshot.tokensError { menu.addItem(label("Token counts unavailable")) }
-        if snapshot.level != "stopped" {
-            menu.addItem(.separator())
-            menu.addItem(label("Claude: " + snapshot.summary("claude")))
-            menu.addItem(label("Codex: " + snapshot.summary("codex")))
-        }
-        menu.addItem(.separator())
-        if snapshot.codeChanged {
-            menu.addItem(action("New version on disk — Reload collector", #selector(reload)))
-        }
-        let acknowledge = action("Acknowledge results", #selector(acknowledge))
-        acknowledge.isEnabled = snapshot.level != "stopped" && !snapshot.paused
-            && snapshot.sessions.contains { $0.state == "ready" }
-        menu.addItem(acknowledge)
-        menu.addItem(action("Reload collector", #selector(reload)))
-        menu.addItem(action("Open log", #selector(openLog)))
-        if let lastError = lastError { menu.addItem(label(lastError)) }
-        menu.addItem(.separator())
-        menu.addItem(action("Quit menu icon", #selector(quit)))
-    }
-
-    func label(_ title: String) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        return item
-    }
-
-    func action(_ title: String, _ selector: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
-        item.target = self
-        return item
     }
 
     @objc func acknowledge() {
@@ -243,6 +252,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 let arguments = CommandLine.arguments
 if arguments.count == 3 && arguments[1] == "--state" {
     print(Snapshot.load(URL(fileURLWithPath: arguments[2]), now: Date().timeIntervalSince1970).level)
+    exit(0)
+}
+if arguments.count == 3 && arguments[1] == "--menu" {
+    let snapshot = Snapshot.load(URL(fileURLWithPath: arguments[2]), now: Date().timeIntervalSince1970)
+    for entry in menuEntries(snapshot, lastError: nil, now: Date()) {
+        let mark = entry.action == nil ? "    " : entry.enabled ? "[x] " : "[ ] "
+        print(entry.isSeparator ? "---" : mark + entry.title)
+    }
     exit(0)
 }
 if arguments.count == 4 && arguments[1] == "--icon" {

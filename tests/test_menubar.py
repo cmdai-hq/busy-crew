@@ -180,6 +180,14 @@ class MenuBarInstallTests(unittest.TestCase):
             installer.install_menubar()
         self.assertEqual(self.installed(), before)
 
+    def test_failed_first_install_does_not_restart_an_agent_without_plist(self):
+        self.tools.loaded.add(self.target)  # Loaded, but its plist was deleted.
+        self.tools.fail_bootstrap = True
+        with self.assertRaises(subprocess.CalledProcessError):
+            installer.install_menubar()
+        self.assertFalse(self.plist.exists())
+        self.assertFalse(self.binary.exists())
+
     def test_uninstall_menubar_removes_agent_plist_and_binary(self):
         installer.install_menubar()
         installer.uninstall_menubar()
@@ -215,6 +223,23 @@ class SwiftAppTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.temp.cleanup()
+
+    def menu(self, content):
+        path = Path(self.temp.name) / "menu-status.json"
+        path.unlink(missing_ok=True)
+        if content is not None:
+            path.write_text(json.dumps(content))
+        result = subprocess.run([str(self.binary), "--menu", str(path)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.splitlines()
+
+    def test_acknowledge_follows_what_the_collector_can_acknowledge(self):
+        status = {"at": time.time(), "sessions": [{"provider": "claude", "state": "ready"}],
+                  "health": {"level": "ok", "reasons": []}, "code_changed": False}
+        self.assertIn("[ ] Acknowledge results", self.menu(dict(status, acknowledgeable=0)))
+        self.assertIn("[x] Acknowledge results", self.menu(dict(status, acknowledgeable=1)))
+        self.assertIn("[ ] Acknowledge results", self.menu(None))
+        self.assertIn("[x] Reload collector", self.menu(None))
 
     def level(self, content):
         path = Path(self.temp.name) / "status.json"
