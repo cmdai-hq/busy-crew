@@ -9,8 +9,10 @@ import signal
 import threading
 import time
 from dataclasses import asdict
+from pathlib import Path
 
 from .device import DEFAULT_ADDRESS, Device
+from .health import code_fingerprint, health
 from .model import layout
 from .observe import Observer
 from .render import render, visible_sessions
@@ -49,6 +51,9 @@ def configure_logging(runtime):
 
 
 class Service:
+    # Code this process loaded; the menu bar offers a reload when it changes on disk.
+    package_root = Path(__file__).parent
+
     def __init__(self, config=None):
         self.runtime = state_dir()
         self.config = config if config is not None else load_json(self.runtime / "config.json", {})
@@ -205,6 +210,8 @@ class Service:
             threading.Thread(target=self.inputs_worker, daemon=True).start()
             LOG.info("Service started")
             last_frame, last_draw, last_error = None, 0, None
+            started_at, code_changed, checked_at = time.time(), False, None
+            fingerprint = code_fingerprint(self.package_root)
             while not self.stop.is_set():
                 self.read_commands(inbox)
                 self.sessions = self.observer.poll()
@@ -213,6 +220,10 @@ class Service:
                 frame = render(self.sessions, self.view, tokens, int(time.time()) % 2, self.observer.errors)
                 xpm = frame.xpm()
                 now = time.monotonic()
+                if checked_at is None:
+                    checked_at = now
+                elif not code_changed and now - checked_at >= 30:
+                    code_changed, checked_at = code_fingerprint(self.package_root) != fingerprint, now
                 device_error = None
                 try:
                     if self.paused:
@@ -240,14 +251,17 @@ class Service:
                     LOG.warning("Source/device status: %s", error or "recovered")
                     last_error = error
                 mode, provider = layout(self.sessions, self.observer.errors)
-                write_json(self.runtime / "status.json", {
+                status = {
                     "at": time.time(), "sessions": [asdict(s) for s in self.sessions],
                     "layout": mode, "provider": provider, "view": self.view,
                     "tokens": tokens, "tokens_at": usage.at, "tokens_error": usage.error,
                     "source_errors": self.observer.errors, "device_error": device_error,
                     "inputs_connected": self.inputs_connected, "paused": self.paused,
                     "inputs_error": self.inputs_error,
-                    "events_dropped": self.events_dropped, "last_control": self.last_control}, durable=False)
+                    "events_dropped": self.events_dropped, "last_control": self.last_control,
+                    "pid": os.getpid(), "started_at": started_at, "code_changed": code_changed}
+                status["health"] = health(status, time.time(), started_at)
+                write_json(self.runtime / "status.json", status, durable=False)
                 self.stop.wait(1)
         finally:
             self.stop.set()

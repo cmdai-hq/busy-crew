@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import logging
+import os
 import queue
 import subprocess
 import tempfile
@@ -347,6 +348,45 @@ class ServiceReliabilityTests(unittest.TestCase):
             self.service.run()
         self.assertEqual(self.service.device.draw.call_count, 2)
         save.assert_called_once()
+
+    def test_status_publishes_health_and_identity(self):
+        self.service.inputs_connected = True
+        self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+        writes = []
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.write_json", side_effect=lambda path, data, **_: writes.append(data)
+        ):
+            self.service.run()
+        self.assertEqual(writes[0]["pid"], os.getpid())
+        self.assertIsInstance(writes[0]["started_at"], float)
+        self.assertIs(writes[0]["code_changed"], False)
+        self.assertEqual(writes[0]["health"], {"level": "ok", "reasons": []})
+
+    def test_code_change_is_detected_after_recheck_interval(self):
+        class Immediate(threading.Event):
+            def wait(self, timeout=None):
+                return super().wait(0)
+        package = self.runtime / "package"
+        package.mkdir()
+        source = package / "service.py"
+        source.write_text("x = 1\n")
+        def draw(frame):
+            if self.service.device.draw.call_count == 1:
+                source.write_text("x = 22\n")
+            else:
+                self.service.stop.set()
+        self.service.package_root = package
+        self.service.inputs_connected = True
+        self.service.stop = Immediate()
+        self.service.device.draw.side_effect = draw
+        clock, writes = iter([0, 31]), []
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.time.monotonic", side_effect=lambda: next(clock, 31)
+        ), patch("agentdeck.service.write_json", side_effect=lambda path, data, **_: writes.append(data)):
+            self.service.run()
+        self.assertIs(writes[0]["code_changed"], False)
+        self.assertIs(writes[1]["code_changed"], True)
+        self.assertEqual(writes[1]["health"]["level"], "update")
 
     def test_setup_failure_still_clears_and_releases_instance_lock(self):
         with patch("agentdeck.service.signal.signal", side_effect=RuntimeError("fixture")):
