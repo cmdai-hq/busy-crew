@@ -48,6 +48,7 @@ def main():
     menubar.add_argument("action", choices=["install", "uninstall"])
     sub.add_parser("status")
     sub.add_parser("ack")
+    sub.add_parser("refresh", help="refresh token totals now instead of within 2 minutes")
     view = sub.add_parser("view"); view.add_argument("name", choices=["sessions", "tokens"])
     shot = sub.add_parser("snapshot"); shot.add_argument("path", type=Path)
     shot.add_argument("--leds", action="store_true")
@@ -86,13 +87,13 @@ def main():
         # CLI output intentionally omits session IDs.
         state["sessions"] = [{"provider": s["provider"], "state": s["state"]} for s in state["sessions"]]
         print(json.dumps(state, indent=2))
-    elif args.command in {"view", "ack"}:
+    elif args.command in {"view", "ack", "refresh"}:
         runtime = state_dir()
         current_status(runtime)
         if sum(1 for _ in (runtime / "inbox").glob("*.json")) >= 128:
             raise SystemExit("Command queue is full; retry after the service catches up")
         write_json(runtime / "inbox" / (str(uuid.uuid4()) + ".json"),
-                   {"command": args.name if args.command == "view" else "ack"})
+                   {"command": args.name if args.command == "view" else args.command})
     elif args.command == "snapshot":
         from .device import Device
         from PIL import Image, ImageDraw

@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import tempfile
 import time
 import unittest
@@ -50,6 +51,12 @@ class CliTests(unittest.TestCase):
         path.unlink()
         with self.assertRaisesRegex(SystemExit, "not running"):
             self.run_cli("status")
+
+    def test_refresh_queues_a_token_refresh(self):
+        write_json(self.runtime / "status.json", {"at": time.time(), "sessions": []})
+        self.run_cli("refresh")
+        queued = [json.loads(path.read_text()) for path in (self.runtime / "inbox").glob("*.json")]
+        self.assertEqual(queued, [{"command": "refresh"}])
 
     def test_command_backlog_is_bounded(self):
         write_json(self.runtime / "status.json", {"at": time.time(), "sessions": []})

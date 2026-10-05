@@ -82,6 +82,7 @@ The same controls are available from the terminal:
 uv run agent-deck view tokens
 uv run agent-deck view sessions
 uv run agent-deck ack
+uv run agent-deck refresh     # recount today's tokens now
 uv run agent-deck snapshot front.png --leds
 ```
 
@@ -89,7 +90,7 @@ uv run agent-deck snapshot front.png --leds
 
 ## Tokens
 
-The tokens view shows today's totals **by agent family**, refreshed every two minutes and displayed in K or M. It uses ccusage's `totalTokens`, including cache tokens as reported by that tool. It does not show an instantaneous rate, context size, or remaining subscription quota. No cost is extrapolated for a model without known pricing. An error, stale data, or a change of day produces a `?`.
+The tokens view shows today's totals **by agent family**, refreshed every two minutes and displayed in K or M. `agent-deck refresh`, or **Refresh tokens now** in the menu bar icon, recounts them within a couple of seconds. Only one ccusage run happens at a time: a request made while one is running joins it. It uses ccusage's `totalTokens`, including cache tokens as reported by that tool. It does not show an instantaneous rate, context size, or remaining subscription quota. No cost is extrapolated for a model without known pricing. An error, stale data, or a change of day produces a `?`.
 
 ## Tracking sources and limitations
 
@@ -126,9 +127,10 @@ uv run agent-deck menubar uninstall
 
 The menu shows:
 - the reasons and the start time;
-- one session count line per agent family;
+- one session count line per agent family, and today's token totals with when they were last counted;
 - the actions:
   - **Acknowledge results**: the same as pressing the scroll wheel, enabled when there is something to acknowledge;
+  - **Refresh tokens now**: runs ccusage immediately instead of within two minutes;
   - **Reload collector**: `launchctl kickstart -k`;
   - **Open log**.
 
