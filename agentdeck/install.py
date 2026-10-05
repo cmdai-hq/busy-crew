@@ -20,11 +20,20 @@ from .hook import EVENTS
 from .storage import claude_dir, codex_dir, load_json, state_dir, write_bytes
 
 LABEL = "local.busybar.agent-deck"
+MENU_LABEL = LABEL + ".menubar"
 MANIFEST = "installation.json"
+STOP_TIMEOUT = 15  # Seconds launchd may keep listing a job that is still exiting.
+MENU_SOURCE = Path(__file__).parent / "menubar" / "AgentDeckMenu.swift"
+# Swift 5 mode keeps older Command Line Tools able to build the app.
+SWIFT_FLAGS = ("-swift-version", "5", "-O")
 
 
 def launch_agent_path():
     return Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
+
+
+def menubar_agent_path():
+    return Path.home() / "Library/LaunchAgents" / (MENU_LABEL + ".plist")
 
 
 def hook_command(runtime=None):
@@ -319,7 +328,7 @@ def set_hooks(enabled):
             raise
 
 
-def _read_plist(path):
+def _read_plist(path, label=LABEL):
     raw = _read_bytes(path)
     if raw is None:
         return None
@@ -327,7 +336,7 @@ def _read_plist(path):
         data = plistlib.loads(raw)
     except (ValueError, plistlib.InvalidFileException) as exc:
         raise ValueError(f"Invalid LaunchAgent: {path}") from exc
-    if not isinstance(data, dict) or data.get("Label") != LABEL:
+    if not isinstance(data, dict) or data.get("Label") != label:
         raise ValueError(f"LaunchAgent is not owned by Agent Deck: {path}")
     return data
 
@@ -373,13 +382,18 @@ def _loaded(launchctl, target):
 
 def _stop(launchctl, target):
     result = subprocess.run([launchctl, "bootout", target], capture_output=True, text=True, timeout=10)
-    if _loaded(launchctl, target):
-        raise RuntimeError(f"LaunchAgent did not stop (launchctl exit {result.returncode})")
+    # A successful bootout returns while the job's process is still exiting, and launchd
+    # keeps listing it meanwhile (~70 ms for the menu app). A failed bootout is final.
+    deadline = time.monotonic() + (STOP_TIMEOUT if result.returncode == 0 else 0)
+    while _loaded(launchctl, target):
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"LaunchAgent did not stop (launchctl exit {result.returncode})")
+        time.sleep(0.1)
 
 
-def _bootstrap(launchctl, domain, path):
+def _bootstrap(launchctl, domain, path, label=LABEL):
     subprocess.run([launchctl, "bootstrap", domain, str(path)], check=True, capture_output=True, timeout=10)
-    if not _loaded(launchctl, domain + "/" + LABEL):
+    if not _loaded(launchctl, domain + "/" + label):
         raise RuntimeError("LaunchAgent was not loaded after bootstrap")
 
 
@@ -487,4 +501,111 @@ def uninstall():
             if errors:
                 raise RuntimeError("Uninstall cleanup incomplete; recovery copies retained: " + "; ".join(errors))
             raise
+        # Only after the collector is gone, so a failed uninstall leaves both running.
+        try:
+            _remove_menubar(launchctl, runtime)
+        except Exception as exc:
+            raise RuntimeError("Collector uninstalled, but the menu bar icon was not removed: " + str(exc)) from exc
     print("Stopped service and removed only Agent Deck hooks. Private runtime data retained.")
+
+
+def _swift_compiler():
+    xcrun = shutil.which("xcrun")
+    if xcrun and subprocess.run([xcrun, "--find", "swiftc"], capture_output=True, timeout=60).returncode == 0:
+        return xcrun
+    raise RuntimeError("Swift compiler unavailable; run `xcode-select --install` and retry")
+
+
+def install_menubar():
+    """Compile the optional menu bar app, then swap it in with its own LaunchAgent."""
+    launchctl = _preflight(None, None, imports=False)
+    xcrun = _swift_compiler()
+    runtime = state_dir()
+    build = Path(tempfile.mkdtemp(prefix=".menubar-build-", dir=runtime))
+    try:
+        built = build / "AgentDeckMenu"
+        result = subprocess.run([xcrun, "swiftc", *SWIFT_FLAGS, "-o", str(built), str(MENU_SOURCE)],
+                                capture_output=True, text=True, timeout=600)
+        if result.returncode != 0 or not built.is_file():
+            raise RuntimeError("Menu bar app failed to compile:\n" + (result.stderr or "")[-2000:])
+        with _installation_lock(runtime):
+            _deploy_menubar(launchctl, runtime, built)
+    finally:
+        shutil.rmtree(build, ignore_errors=True)
+    print("Installed the menu bar status icon")
+
+
+def _deploy_menubar(launchctl, runtime, built):
+    path = menubar_agent_path()
+    plist_before = _read_bytes(path)
+    _read_plist(path, MENU_LABEL)  # Refuse to replace a plist Agent Deck does not own.
+    binary = runtime / "menubar" / "AgentDeckMenu"
+    previous = binary.with_name("AgentDeckMenu.previous")
+    agent = {"Label": MENU_LABEL, "ProgramArguments": [str(binary)], "RunAtLoad": True,
+             # Restarted after a crash, but "Quit menu icon" (exit 0) stays closed until next login.
+             "KeepAlive": {"SuccessfulExit": False}, "LimitLoadToSessionType": "Aqua",
+             "ProcessType": "Interactive",
+             "EnvironmentVariables": {"AGENT_DECK_STATE": str(runtime), "AGENT_DECK_PYTHON": sys.executable,
+                                      "AGENT_DECK_LABEL": LABEL},
+             "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"}
+    domain = "gui/" + str(os.getuid())
+    target = domain + "/" + MENU_LABEL
+    was_loaded = _loaded(launchctl, target)
+    changes, kept_previous, swapped = [], False, False
+    try:
+        if was_loaded:
+            _stop(launchctl, target)
+        binary.parent.mkdir(mode=0o700, exist_ok=True)
+        if binary.exists():
+            os.replace(binary, previous)
+            kept_previous = True
+        os.replace(built, binary)
+        swapped = True
+        binary.chmod(0o700)
+        _apply_plans([(path, plist_before, plistlib.dumps(agent))], runtime, changes)
+        _bootstrap(launchctl, domain, path, MENU_LABEL)
+    except Exception as exc:
+        errors = []
+        try:
+            if _loaded(launchctl, target):
+                _stop(launchctl, target)
+        except Exception as stop_error:
+            errors.append(str(stop_error))
+        try:
+            if swapped:  # A failure before the swap leaves the installed binary in place.
+                binary.unlink(missing_ok=True)
+            if kept_previous:
+                os.replace(previous, binary)
+        except OSError as restore_error:
+            errors.append(str(restore_error))
+        errors.extend(_rollback(changes))
+        # Without its former plist there is nothing to restart, as in install().
+        if was_loaded and plist_before is not None and not errors:
+            try:
+                _bootstrap(launchctl, domain, path, MENU_LABEL)
+            except Exception as restart_error:
+                errors.append(str(restart_error))
+        if errors:
+            raise RuntimeError("Menu bar installation failed; rollback incomplete: " + "; ".join(errors)) from exc
+        raise
+    previous.unlink(missing_ok=True)
+
+
+def uninstall_menubar():
+    launchctl = _preflight(None, None, imports=False)
+    runtime = state_dir()
+    with _installation_lock(runtime):
+        _remove_menubar(launchctl, runtime)
+    print("Removed the menu bar status icon")
+
+
+def _remove_menubar(launchctl, runtime):
+    path = menubar_agent_path()
+    plist_before = _read_bytes(path)
+    if plist_before is not None:
+        _read_plist(path, MENU_LABEL)
+        target = "gui/" + str(os.getuid()) + "/" + MENU_LABEL
+        if _loaded(launchctl, target):
+            _stop(launchctl, target)
+        _remove_preserving(path, plist_before, runtime)
+    (runtime / "menubar" / "AgentDeckMenu").unlink(missing_ok=True)

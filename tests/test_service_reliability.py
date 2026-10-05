@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import logging
+import os
 import queue
 import subprocess
 import tempfile
@@ -347,6 +348,77 @@ class ServiceReliabilityTests(unittest.TestCase):
             self.service.run()
         self.assertEqual(self.service.device.draw.call_count, 2)
         save.assert_called_once()
+
+    def test_status_publishes_health_and_identity(self):
+        self.service.inputs_connected = True
+        self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+        writes = []
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.write_json", side_effect=lambda path, data, **_: writes.append(data)
+        ):
+            self.service.run()
+        self.assertEqual(writes[0]["pid"], os.getpid())
+        self.assertIsInstance(writes[0]["started_at"], float)
+        self.assertIs(writes[0]["code_changed"], False)
+        self.assertEqual(writes[0]["health"], {"level": "ok", "reasons": []})
+
+    def test_code_change_is_detected_after_recheck_interval(self):
+        class Immediate(threading.Event):
+            def wait(self, timeout=None):
+                return super().wait(0)
+        package = self.runtime / "package"
+        package.mkdir()
+        source = package / "service.py"
+        source.write_text("x = 1\n")
+        def draw(frame):
+            if self.service.device.draw.call_count == 1:
+                source.write_text("x = 22\n")
+            else:
+                self.service.stop.set()
+        self.service.package_root = package
+        self.service.inputs_connected = True
+        self.service.stop = Immediate()
+        self.service.device.draw.side_effect = draw
+        clock, writes = iter([0, 31]), []
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.time.monotonic", side_effect=lambda: next(clock, 31)
+        ), patch("agentdeck.service.write_json", side_effect=lambda path, data, **_: writes.append(data)):
+            self.service.run()
+        self.assertIs(writes[0]["code_changed"], False)
+        self.assertIs(writes[1]["code_changed"], True)
+        self.assertEqual(writes[1]["health"]["level"], "update")
+
+    def test_fingerprint_failures_never_stop_the_collector(self):
+        class Immediate(threading.Event):
+            def wait(self, timeout=None):
+                return super().wait(0)
+        self.service.stop = Immediate()
+        self.service.device.draw.side_effect = lambda frame: (
+            self.service.stop.set() if self.service.device.draw.call_count == 2 else None)
+        # A reinstall can remove a directory while rglob walks it.
+        failures = [FileNotFoundError("vanished"), FileNotFoundError("vanished")]
+        clock, writes = iter([0, 31]), []
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.time.monotonic", side_effect=lambda: next(clock, 31)
+        ), patch("agentdeck.service.code_fingerprint", side_effect=failures), patch(
+            "agentdeck.service.write_json", side_effect=lambda path, data, **_: writes.append(data)
+        ):
+            self.service.run()
+        self.assertEqual([status["code_changed"] for status in writes], [False, False])
+
+    def test_status_counts_only_results_the_bar_can_acknowledge(self):
+        # OK acknowledges what the bar shows: nothing from the tokens view.
+        self.service.observer = SimpleNamespace(poll=lambda: [session()], errors=[], acknowledge=MagicMock())
+        counts = {}
+        for view in ["sessions", "tokens"]:
+            self.service.view, self.service.stop, writes = view, threading.Event(), []
+            self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+            with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+                "agentdeck.service.write_json", side_effect=lambda path, data, **_: writes.append(data)
+            ):
+                self.service.run()
+            counts[view] = writes[0]["acknowledgeable"]
+        self.assertEqual(counts, {"sessions": 1, "tokens": 0})
 
     def test_setup_failure_still_clears_and_releases_instance_lock(self):
         with patch("agentdeck.service.signal.signal", side_effect=RuntimeError("fixture")):
