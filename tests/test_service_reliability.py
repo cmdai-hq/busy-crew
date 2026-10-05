@@ -9,6 +9,7 @@ import queue
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -36,6 +37,7 @@ def service_fixture(runtime):
     service = Service.__new__(Service)
     service.runtime = runtime
     service.stop = threading.Event()
+    service.usage_running = threading.Lock()
     service.events = queue.Queue(maxsize=MAX_EVENTS)
     service.events_dropped = 0
     service.view = "sessions"
@@ -419,6 +421,36 @@ class ServiceReliabilityTests(unittest.TestCase):
                 self.service.run()
             counts[view] = writes[0]["acknowledgeable"]
         self.assertEqual(counts, {"sessions": 1, "tokens": 0})
+
+    def test_refresh_command_runs_ccusage_now(self):
+        done = threading.Event()
+        self.service.usage.refresh = done.set  # Otherwise the next periodic run is up to 120 s away.
+        self.service.command("refresh")
+        self.assertTrue(done.wait(2))
+        self.assertEqual(self.service.last_control, "refresh")
+
+    def test_refresh_during_a_run_starts_no_thread(self):
+        self.service.usage_running.acquire()  # A run is in progress.
+        try:
+            with patch("agentdeck.service.threading.Thread") as thread:
+                for _ in range(5):
+                    self.service.command("refresh")
+            thread.assert_not_called()
+        finally:
+            self.service.usage_running.release()
+
+    def test_token_refreshes_never_overlap(self):
+        running, release, calls = threading.Event(), threading.Event(), []
+        def slow():
+            calls.append("ccusage")
+            running.set()
+            release.wait(2)
+        self.service.usage.refresh = slow
+        self.service.command("refresh")
+        self.assertTrue(running.wait(2))
+        self.service.refresh_usage()  # Served by the run in progress: returns at once.
+        release.set()
+        self.assertEqual(calls, ["ccusage"])
 
     def test_setup_failure_still_clears_and_releases_instance_lock(self):
         with patch("agentdeck.service.signal.signal", side_effect=RuntimeError("fixture")):

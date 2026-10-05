@@ -26,6 +26,9 @@
   collector's health (stopped, degraded, update available, paused), with
   acknowledge, reload and open-log actions. The collector publishes `health`,
   `code_changed`, `pid` and `started_at` in `status.json`.
+- Add `agent-deck refresh` and a **Refresh tokens now** menu bar action to recount
+  today's tokens immediately, instead of waiting up to two minutes. The menu also
+  shows the token totals and when they were counted.
 
 ## 0.1.0
 

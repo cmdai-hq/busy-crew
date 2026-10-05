@@ -248,6 +248,18 @@ class SwiftAppTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.splitlines()
 
+    def test_menu_offers_token_refresh_and_shows_totals(self):
+        status = {"at": time.time(), "sessions": [], "health": {"level": "ok", "reasons": []},
+                  "tokens": {"claude": 96136546, "codex": 9872119}, "tokens_at": time.time() - 90}
+        lines = [line.strip() for line in self.menu(status)]
+        self.assertIn("[x] Refresh tokens now", lines)
+        self.assertTrue(any(line.startswith("Tokens today: Claude 96.1M · Codex 9.9M") for line in lines), lines)
+        self.assertIn("[ ] Refresh tokens now", self.menu(None))
+        just_counted = [line.strip() for line in self.menu(dict(status, tokens_at=time.time()))]
+        self.assertTrue(any(line.endswith("(updated now)") for line in just_counted), just_counted)
+        no_totals = [line.strip() for line in self.menu(dict(status, tokens={}))]
+        self.assertFalse(any(line.startswith("Tokens today") for line in no_totals))
+
     def test_acknowledge_follows_what_the_collector_can_acknowledge(self):
         status = {"at": time.time(), "sessions": [{"provider": "claude", "state": "ready"}],
                   "health": {"level": "ok", "reasons": []}, "code_changed": False}

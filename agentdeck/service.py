@@ -24,7 +24,7 @@ MAX_EVENTS = 256
 MAX_INBOX_FILES = 128
 MAX_COMMAND_BYTES = 65536
 MAX_COMMANDS_PER_POLL = 128
-COMMANDS = {"sessions", "tokens", "toggle", "ack", "pause", "resume"}
+COMMANDS = {"sessions", "tokens", "toggle", "ack", "pause", "resume", "refresh"}
 
 
 class PrivateRotatingHandler(RotatingFileHandler):
@@ -68,6 +68,7 @@ class Service:
         self.events = queue.Queue(maxsize=MAX_EVENTS)
         self.events_dropped = 0
         self.stop = threading.Event()
+        self.usage_running = threading.Lock()
         self.sessions = []
         self.presented_sessions = []
         self.presented_until = 0
@@ -105,6 +106,15 @@ class Service:
                     self.observer.acknowledge(self.presented_sessions)
                 except (OSError, ValueError) as exc:
                     LOG.warning("Acknowledgement could not be persisted: %s", type(exc).__name__)
+        elif command == "refresh":
+            # A run in progress already covers this request. Otherwise run ccusage off the main
+            # loop so the bar never waits on it; a burst of requests starts one thread at most.
+            if self.usage_running.acquire(blocking=False):
+                try:
+                    threading.Thread(target=self.refresh_usage, args=(True,), daemon=True).start()
+                except RuntimeError:
+                    self.usage_running.release()
+                    LOG.warning("Token refresh could not start")
         elif command == "pause":
             self.paused = True
         elif command == "resume":
@@ -117,14 +127,22 @@ class Service:
         except OSError:  # A reinstall can remove a directory mid-scan; retried next interval.
             return None
 
+    def refresh_usage(self, locked=False):
+        """Run ccusage once; a request made while a run is in progress joins that run."""
+        if not locked and not self.usage_running.acquire(blocking=False):
+            return
+        try:
+            self.usage.refresh()
+        except Exception as exc:
+            # A worker failure cannot silently disable all future refreshes.
+            self.usage.unavailable()
+            LOG.warning("Token refresh failed: %s", type(exc).__name__)
+        finally:
+            self.usage_running.release()
+
     def usage_loop(self):
         while not self.stop.is_set():
-            try:
-                self.usage.refresh()
-            except Exception as exc:
-                # A worker failure cannot silently disable all future refreshes.
-                self.usage.unavailable()
-                LOG.warning("Token refresh failed: %s", type(exc).__name__)
+            self.refresh_usage()
             self.stop.wait(120)
 
     async def retry_wait(self, delay):

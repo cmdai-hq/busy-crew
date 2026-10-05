@@ -24,6 +24,8 @@ struct Snapshot {
     var tokensError = false
     var codeChanged = false
     var acknowledgeable = 0
+    var tokens: [String: Int] = [:]
+    var tokensAt: Double?
 
     static func stopped(_ reason: String) -> Snapshot {
         Snapshot(reasons: [reason])
@@ -58,6 +60,8 @@ struct Snapshot {
         }
         snapshot.tokensError = status["tokens_error"] is String
         snapshot.acknowledgeable = (status["acknowledgeable"] as? NSNumber)?.intValue ?? 0
+        snapshot.tokens = (status["tokens"] as? [String: Any] ?? [:]).compactMapValues { ($0 as? NSNumber)?.intValue }
+        snapshot.tokensAt = (status["tokens_at"] as? NSNumber)?.doubleValue
         return snapshot
     }
 
@@ -69,6 +73,19 @@ struct Snapshot {
         }
         return parts.isEmpty ? "none" : parts.joined(separator: " · ")
     }
+}
+
+/// Same compact form as the bar's token view (agentdeck/render.py compact()).
+func compact(_ count: Int?) -> String {
+    guard let count = count, count >= 0 else { return "?" }
+    for (unit, divisor) in [("T", 1_000_000_000_000), ("G", 1_000_000_000), ("M", 1_000_000)] where count >= divisor {
+        if count < 100 * divisor {
+            let tenths = (count * 10 + divisor / 2) / divisor
+            return "\(tenths / 10).\(tenths % 10)\(unit)"
+        }
+        return "\(count / divisor)\(unit)"
+    }
+    return count >= 1000 ? "\(count / 1000)K" : "\(count)"
 }
 
 struct Entry {
@@ -86,6 +103,7 @@ func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date) -> [Entry]
     if let startedAt = snapshot.startedAt, snapshot.level != "stopped" {
         let formatter = RelativeDateTimeFormatter()
         formatter.locale = Locale(identifier: "en")
+        formatter.dateTimeStyle = .named  // "now" rather than "in 0 seconds".
         let started = Date(timeIntervalSince1970: startedAt)
         entries.append(Entry(title: "Started " + formatter.localizedString(for: started, relativeTo: now)))
     }
@@ -93,6 +111,16 @@ func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date) -> [Entry]
     if snapshot.level != "stopped" {
         entries += [.separator, Entry(title: "Claude: " + snapshot.summary("claude")),
                     Entry(title: "Codex: " + snapshot.summary("codex"))]
+        if !snapshot.tokens.isEmpty {
+            var line = "Tokens today: Claude \(compact(snapshot.tokens["claude"])) · Codex \(compact(snapshot.tokens["codex"]))"
+            if let tokensAt = snapshot.tokensAt {
+                let formatter = RelativeDateTimeFormatter()
+                formatter.locale = Locale(identifier: "en")
+        formatter.dateTimeStyle = .named  // "now" rather than "in 0 seconds".
+                line += " (updated " + formatter.localizedString(for: Date(timeIntervalSince1970: tokensAt), relativeTo: now) + ")"
+            }
+            entries.append(Entry(title: line))
+        }
     }
     entries.append(.separator)
     if snapshot.codeChanged {
@@ -102,6 +130,8 @@ func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date) -> [Entry]
     // The collector publishes what OK would acknowledge on the bar right now.
     entries.append(Entry(title: "Acknowledge results", action: #selector(AppDelegate.acknowledge),
                          enabled: snapshot.level != "stopped" && snapshot.acknowledgeable > 0))
+    entries.append(Entry(title: "Refresh tokens now", action: #selector(AppDelegate.refreshTokens),
+                         enabled: snapshot.level != "stopped"))
     entries.append(Entry(title: "Reload collector", action: #selector(AppDelegate.reload), enabled: true))
     entries.append(Entry(title: "Open log", action: #selector(AppDelegate.openLog), enabled: true))
     if let lastError = lastError { entries.append(Entry(title: lastError)) }
@@ -212,6 +242,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         run(python, ["-I", "-m", "agentdeck.cli", "ack"], name: "Acknowledge results")
+    }
+
+    @objc func refreshTokens() {
+        guard let python = environment["AGENT_DECK_PYTHON"] else {
+            lastError = "Last action failed: Refresh tokens now (no interpreter configured)"
+            return
+        }
+        run(python, ["-I", "-m", "agentdeck.cli", "refresh"], name: "Refresh tokens now")
     }
 
     @objc func reload() {
