@@ -15,6 +15,7 @@ from .storage import claude_dir, codex_dir, load_json, write_json
 STATES = {"working", "waiting", "ready", "idle", "unknown"}
 MAX_ROLLOUT_SCAN = 32_000_000
 MAX_RECORD = 2_000_000
+CODEX_DATABASES = ("state_5.sqlite", "thread_history_1.sqlite")
 
 
 def identifier(value):
@@ -76,19 +77,9 @@ def record_json(line):
     return record
 
 
-def read_tail(path, size=MAX_RECORD):
-    with path.open("rb") as handle:
-        total = handle.seek(0, 2)
-        handle.seek(max(0, total - size))
-        if total > size:
-            handle.readline()
-        for line in handle:
-            yield record_json(line)
-
-
 def read_turn(path, turn_id):
     """Read backwards to a verified selected-turn boundary, with explicit limits."""
-    records, buffer = [], b""
+    records, buffer, terminated = [], b"", False
     with path.open("rb") as handle:
         position = handle.seek(0, 2)
         floor = max(0, position - MAX_ROLLOUT_SCAN)
@@ -97,6 +88,13 @@ def read_turn(path, turn_id):
             position -= length
             handle.seek(position)
             buffer = handle.read(length) + buffer
+            if not terminated:
+                # Codex may still be appending the last record: parse only complete lines.
+                end = buffer.rfind(b"\n")
+                if end < 0:
+                    buffer = b""
+                    continue
+                buffer, terminated = buffer[:end], True
             lines = buffer.split(b"\n")
             buffer = lines.pop(0)
             for line in reversed(lines):
@@ -172,7 +170,7 @@ class Observer:
         self.codex_root = Path(codex_root) if codex_root is not None else codex_dir(self.home)
         self.clock, self.alive, self.started = clock, alive, clock()
         self.previous, self.instances, self.tail_cache = {}, {}, {}
-        self.errors, self.state_errors = [], []
+        self.errors, self.state_errors = [], set()  # Ledgers that could not be read intact.
         self.acks = self._load_state("acknowledged.json")
         self.results = self._load_state("completions.json")
         self.results_dirty = False
@@ -181,7 +179,7 @@ class Observer:
                 self._state_key(key)
                 identifier(version)
             except ValueError:
-                self.state_errors.append("state")
+                self.state_errors.add("acknowledged.json")
                 self.acks.pop(key)
         for key, result in list(self.results.items()):
             try:
@@ -196,10 +194,12 @@ class Observer:
                     self.results.pop(key)
                     self.results_dirty = True
             except ValueError:
-                self.state_errors.append("state")
+                self.state_errors.add("completions.json")
                 self.results.pop(key)
         self.ready = {key: result["version"] for key, result in self.results.items()}
-        self.known_sources = {"claude": (self.claude_root / "sessions").exists(), "codex": self.codex_root.exists()}
+        # A Codex home alone (e.g. CLI-only) does not establish the desktop databases.
+        self.known_sources = {"claude": (self.claude_root / "sessions").exists(),
+                              "codex": all((self.codex_root / name).exists() for name in CODEX_DATABASES)}
 
     @staticmethod
     def _state_key(key):
@@ -212,7 +212,7 @@ class Observer:
         try:
             return load_json(self.runtime / name, {})
         except (OSError, ValueError):
-            self.state_errors.append("state")
+            self.state_errors.add(name)
             return {}
 
     def _error(self, provider):
@@ -223,6 +223,12 @@ class Observer:
         self.results_dirty = True
         write_json(self.runtime / "completions.json", self.results)
         self.results_dirty = False
+        self.state_errors.discard("completions.json")
+
+    def _save_acks(self, acks):
+        write_json(self.runtime / "acknowledged.json", acks)
+        self.acks = acks
+        self.state_errors.discard("acknowledged.json")
 
     def _forget(self, key):
         changed = self.results.pop(key, None) is not None
@@ -230,7 +236,7 @@ class Observer:
         self.previous.pop(key, None)
         self.instances.pop(key, None)
         if self.acks.pop(key, None) is not None:
-            write_json(self.runtime / "acknowledged.json", self.acks)
+            self._save_acks(self.acks)
         if changed:
             self._save_results()
 
@@ -242,8 +248,7 @@ class Observer:
                 acknowledgements[key] = session.version
                 keys.append(key)
         if keys:
-            write_json(self.runtime / "acknowledged.json", acknowledgements)
-            self.acks = acknowledgements
+            self._save_acks(acknowledgements)
             for key in keys:
                 self.results.pop(key, None)
                 self.ready.pop(key, None)
@@ -365,7 +370,7 @@ class Observer:
                                       (state == "working" and (item["kind"] != "permission" or item["at"] >= native_at)) or
                                       item["at"] >= native_at]
                     terminal = hook.get("terminal")
-                    if any(item.get("ambiguous") for item in pending.values()):
+                    if any(item.get("ambiguous") and item["at"] >= native_at for item in pending.values()):
                         state = "unknown"
                     elif active_pending:
                         state = "waiting"
@@ -393,8 +398,7 @@ class Observer:
         return result
 
     def codex(self):
-        state_db = self.codex_root / "state_5.sqlite"
-        history_db = self.codex_root / "thread_history_1.sqlite"
+        state_db, history_db = (self.codex_root / name for name in CODEX_DATABASES)
         if not state_db.exists() or not history_db.exists():
             if self.known_sources["codex"] or any(key.startswith("codex:") for key in self.results):
                 raise ValueError("Codex databases unavailable or incompatible")
@@ -474,7 +478,7 @@ class Observer:
         return result
 
     def poll(self):
-        sessions, self.errors = [], list(set(self.state_errors))
+        sessions, self.errors = [], ["state"] if self.state_errors else []
         if self.results_dirty:
             try:
                 self._save_results()

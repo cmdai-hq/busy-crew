@@ -58,6 +58,12 @@ def write_bytes(path, data):
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, path)
+        # The rename itself must survive a crash, not only the file contents.
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

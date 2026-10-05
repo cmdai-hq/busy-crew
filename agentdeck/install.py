@@ -277,6 +277,11 @@ def _hook_plans(enabled, runtime, manifest, old_plist=None, root=None):
     return plans, new_manifest
 
 
+def _recorded_root(manifest):
+    # Later hook operations follow the installed settings file, not the caller's environment.
+    return Path(manifest["hook_settings"]).parent if manifest else None
+
+
 def _apply_plans(plans, runtime, changes):
     for path, before, after in plans:
         change = _replace_preserving(path, after, before, runtime)
@@ -299,7 +304,7 @@ def set_hooks(enabled):
     with _installation_lock(runtime):
         manifest = _load_manifest(runtime)
         old_plist = _read_plist(launch_agent_path())
-        plans, updated = _hook_plans(enabled, runtime, manifest, old_plist)
+        plans, updated = _hook_plans(enabled, runtime, manifest, old_plist, _recorded_root(manifest))
         manifest_path = runtime / MANIFEST
         before = _read_bytes(manifest_path)
         changes = []
@@ -359,7 +364,9 @@ def _loaded(launchctl, target):
     result = subprocess.run([launchctl, "print", target], capture_output=True, text=True, timeout=10)
     if result.returncode == 0:
         return True
-    if "could not find service" in result.stderr.lower() or "service not found" in result.stderr.lower():
+    # 113 is launchctl's "Could not find specified service"; its wording varies by release.
+    output = (result.stdout + result.stderr).lower()
+    if result.returncode == 113 or "could not find service" in output or "service not found" in output:
         return False
     raise RuntimeError("Unable to determine the LaunchAgent state")
 
@@ -453,12 +460,14 @@ def uninstall():
         plist_before = _read_bytes(path)
         _read_plist(path)
         manifest = _load_manifest(runtime)
-        plans, updated = _hook_plans(False, runtime, manifest, _read_plist(path))
-        target = "gui/" + str(os.getuid()) + "/" + LABEL
-        if _loaded(launchctl, target):
-            _stop(launchctl, target)  # Abort before deleting anything if still loaded.
+        plans, updated = _hook_plans(False, runtime, manifest, _read_plist(path), _recorded_root(manifest))
+        domain = "gui/" + str(os.getuid())
+        target = domain + "/" + LABEL
+        was_loaded = _loaded(launchctl, target)
         changes = []
         try:
+            if was_loaded:
+                _stop(launchctl, target)  # Abort before deleting anything if still loaded.
             _apply_plans(plans, runtime, changes)
             manifest_path = runtime / MANIFEST
             if manifest:
@@ -468,6 +477,13 @@ def uninstall():
                 changes.append(change)
         except Exception:
             errors = _rollback(changes)
+            # A failed uninstall leaves the previous installation running, as before.
+            if was_loaded and not errors:
+                try:
+                    if not _loaded(launchctl, target):
+                        _bootstrap(launchctl, domain, path)
+                except Exception as restart_error:
+                    errors.append(str(restart_error))
             if errors:
                 raise RuntimeError("Uninstall cleanup incomplete; recovery copies retained: " + "; ".join(errors))
             raise

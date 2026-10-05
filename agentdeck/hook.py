@@ -118,13 +118,17 @@ def update_snapshot(previous, data, at):
         if not matches and fingerprint and finished.get(fingerprint, -1) >= at:
             return snapshot
         interaction = matches[0] if len(matches) == 1 else "permission:" + (fingerprint or "unidentified")
+    unidentified = "permission:unidentified"
     if event in {"PermissionRequest", "Elicitation"} or (event == "PreToolUse" and data.get("tool_name") == "AskUserQuestion"):
         if interaction not in resolved:
             kind = "elicitation" if event == "Elicitation" else ("permission" if event == "PermissionRequest" else "question")
             pending[interaction] = {"kind": kind, "at": at,
                                     "ambiguous": interaction.startswith("permission:") or interaction.endswith(":unidentified")}
+        if event == "PermissionRequest" and interaction != unidentified:
+            pending.pop(unidentified, None)  # The request explains its prompt notification.
     elif event == "Notification":
-        pending.setdefault("permission:unidentified", {"kind": "permission", "at": at, "ambiguous": True})
+        if not any(key != unidentified and item["kind"] == "permission" for key, item in pending.items()):
+            pending.setdefault(unidentified, {"kind": "permission", "at": at, "ambiguous": True})
     elif event in {"PostToolUse", "PostToolUseFailure", "ElicitationResult"}:
         if not interaction.endswith(":unidentified"):
             pending.pop(interaction, None)
@@ -134,6 +138,8 @@ def update_snapshot(previous, data, at):
                 finished[digest] = at
             if digest and digest not in calls.values():
                 pending.pop("permission:" + digest, None)
+        if event != "ElicitationResult" and pending.get(unidentified, {}).get("at", at) <= at:
+            pending.pop(unidentified, None)  # A later tool result means the prompt was answered.
         if snapshot.pop("terminal", None):
             snapshot["generation"] = snapshot.get("generation", 0) + 1
     elif event == "PreToolUse":

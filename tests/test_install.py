@@ -286,6 +286,45 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue(self.launch.loaded)
         self.assertNotIn("Stopped", self.output.getvalue())
 
+    def test_failed_uninstall_cleanup_restarts_the_stopped_service(self):
+        for failure in ["cleanup", "post-bootout query"]:
+            with self.subTest(failure=failure):
+                installer.install()
+                before = self.state_bytes()
+                patches = contextlib.ExitStack()
+                if failure == "cleanup":
+                    patches.enter_context(patch.object(installer, "_remove_preserving", side_effect=RuntimeError("simulated cleanup failure")))
+                else:
+                    self.launch.fail_print_after_bootout = True
+                with patches, self.assertRaises((RuntimeError, OSError)):
+                    installer.uninstall()
+                self.assertEqual(self.state_bytes(), before)
+                self.assertTrue(self.launch.loaded)
+
+    def test_hook_operations_use_the_recorded_custom_claude_root(self):
+        custom = self.home / "custom Claude"
+        with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(custom)}):
+            installer.install()
+        # Without the variable, the unrelated default settings must stay untouched.
+        self.settings.parent.mkdir()
+        self.settings.write_bytes(b"{broken")
+        installer.set_hooks(True)
+        self.assertIn(installer.hook_command(), json.dumps(load_json(custom / "settings.json")))
+        installer.uninstall()
+        self.assertEqual(load_json(custom / "settings.json")["hooks"], {})
+        self.assertEqual(self.settings.read_bytes(), b"{broken")
+
+    def test_missing_launchagent_is_recognized_by_exit_code_or_either_stream(self):
+        for code, stdout, stderr, expected in [(113, "", "Unfamiliar wording", False),
+                                               (1, "Could not find service", "", False),
+                                               (0, "", "", True)]:
+            with self.subTest(code=code, stdout=stdout, stderr=stderr), \
+                 patch.object(installer.subprocess, "run", return_value=subprocess.CompletedProcess([], code, stdout, stderr)):
+                self.assertEqual(installer._loaded("launchctl", "gui/1/fictional"), expected)
+        with patch.object(installer.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "Operation not permitted")):
+            with self.assertRaisesRegex(RuntimeError, "LaunchAgent state"):
+                installer._loaded("launchctl", "gui/1/fictional")
+
     def test_late_plist_edit_during_uninstall_is_retained_and_cleanup_rolled_back(self):
         installer.install()
         before = self.state_bytes()
@@ -344,6 +383,17 @@ class StorageAndPreflightTests(unittest.TestCase):
                     load_json(path, {}, max_bytes=32)
             path.write_text("[1]")
             self.assertEqual(load_json(path, require_mapping=False), [1])
+
+    def test_replacement_syncs_the_parent_directory_entry(self):
+        synced = []
+        real_fsync = os.fsync
+        def record(fd):
+            synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+            return real_fsync(fd)
+        with tempfile.TemporaryDirectory() as root, patch("agentdeck.storage.os.fsync", side_effect=record):
+            write_bytes(Path(root) / "ledger.json", b"{}")
+            self.assertEqual((Path(root) / "ledger.json").read_bytes(), b"{}")
+        self.assertEqual(synced, [False, True])
 
     def test_paths_honor_both_documented_environment_variables(self):
         with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": "/tmp/fake Claude", "CODEX_HOME": "/tmp/fake Codex"}):

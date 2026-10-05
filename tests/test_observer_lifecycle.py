@@ -192,6 +192,36 @@ class LifecycleTests(unittest.TestCase):
         # Native status clock may remain unchanged when the permission is accepted.
         self.assertEqual(self.observer.poll()[0].state, "working")
 
+    def test_permission_notification_is_resolved_with_its_tool_call(self):
+        tool = {"tool_name": "Bash", "tool_input": {"command": "private command"}}
+        for order in [("PermissionRequest", "Notification"), ("Notification", "PermissionRequest"), ("Notification",)]:
+            with self.subTest(order=order):
+                call = "-".join(order)
+                self.now += 10
+                self.emit("UserPromptSubmit")
+                self.now += 1
+                self.emit("PreToolUse", tool_use_id=call, **tool)
+                self.now += 1
+                for kind in order:
+                    self.emit(kind, **(tool if kind == "PermissionRequest" else {"notification_type": "permission_prompt"}))
+                self.native()
+                # A notification explained by an identified request is not ambiguous.
+                self.assertEqual(self.observer.poll()[0].state, "waiting" if len(order) == 2 else "unknown")
+                self.now += 1
+                self.emit("PostToolUse", tool_use_id=call, **tool)
+                self.assertEqual(self.observer.poll()[0].state, "working")
+                self.assertFalse(self.snapshot["pending"])
+
+    def test_ambiguous_permission_older_than_native_update_does_not_override_it(self):
+        self.emit("UserPromptSubmit")
+        self.now += 1
+        self.emit("Notification", notification_type="permission_prompt")
+        self.native()
+        self.assertEqual(self.observer.poll()[0].state, "unknown")
+        self.now += 1
+        self.native()
+        self.assertEqual(self.observer.poll()[0].state, "working")
+
     def test_identical_parallel_permissions_are_unknown_until_all_calls_resolve(self):
         self.emit("UserPromptSubmit")
         self.now += 1
@@ -298,6 +328,26 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(hook.valid_snapshot(repaired))
         write_json(self.runtime / "hooks/a.json", repaired)
         self.observer.poll()
+        self.assertFalse(self.observer.errors)
+
+    def test_state_error_clears_once_each_corrupt_ledger_is_rewritten(self):
+        (self.runtime).mkdir(parents=True, exist_ok=True)
+        (self.runtime / "completions.json").write_text("{broken")
+        (self.runtime / "acknowledged.json").write_text("{broken")
+        self.observer = self.new_observer()
+        self.native("idle")
+        self.observer.poll()
+        self.assertEqual(self.observer.errors, ["state"])
+        self.emit("UserPromptSubmit")
+        self.now += 1
+        self.emit("Stop")
+        self.native("idle")
+        result = self.observer.poll()[0]
+        self.assertEqual(result.state, "ready")
+        self.assertEqual(self.observer.poll()[0], result)
+        self.assertEqual(self.observer.errors, ["state"])  # acknowledged.json is still corrupt.
+        self.observer.acknowledge([result])
+        self.assertEqual(self.observer.poll()[0].state, "idle")
         self.assertFalse(self.observer.errors)
 
     def test_malformed_legacy_nested_fields_are_not_interpreted(self):
@@ -455,6 +505,24 @@ class LifecycleTests(unittest.TestCase):
         self.rollout.write_text(json.dumps(event("task_started", turn_id="turn")) + "\n")
         self.assertEqual(self.observer.poll()[0].state, "working")
         self.assertFalse(self.observer.errors)
+
+    def test_record_still_being_appended_is_not_a_provider_error(self):
+        self.codex_fixture([event("task_started", turn_id="turn")])
+        with self.rollout.open("a") as stream:
+            stream.write('{"type":"event_msg","payload":{"type":"task_comp')
+        self.assertEqual(self.observer.poll()[0].state, "working")
+        self.assertFalse(self.observer.errors)
+        with self.rollout.open("a") as stream:
+            stream.write('lete","turn_id":"turn"}}\n')
+        os.utime(self.rollout, (self.now, self.now + 1))
+        self.assertEqual(self.observer.poll()[0].state, "ready")
+
+    def test_codex_home_without_desktop_databases_is_not_a_source_error(self):
+        self.codex.mkdir()  # For example, created by the Codex CLI alone.
+        observer = self.new_observer()
+        self.native()
+        self.assertEqual([s.provider for s in observer.poll()], ["claude"])
+        self.assertFalse(observer.errors)
 
     def test_rollout_scan_limit_is_explicit(self):
         path = self.root / "rollout"
