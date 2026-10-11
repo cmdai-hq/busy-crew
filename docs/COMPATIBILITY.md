@@ -15,11 +15,11 @@ not a supported LaunchAgent installation target.
 Codex approval indicators are partial because not every approval is written to
 local rollouts. The monitor cannot infer missing interaction events. It monitors
 this Mac, not remote/cloud agents. A source error is reported explicitly without
-inventing a session count. See the README for heuristic age limits and startup
+inventing a session count. See [how it works](how-it-works.md) for heuristic age limits and startup
 behavior.
 
-The project code is source-available under the PolyForm Noncommercial License
-1.0.0. Python wheels include its LICENSE. Dependencies
+The project code is licensed under the MIT License. Python wheels include its
+LICENSE. Dependencies
 are installed separately rather than copied into the wheel. busylib is MIT,
 Pillow is MIT-CMU, and zeroconf is LGPL-2.1-or-later; the remaining installed
 dependencies have their own notices. Anyone distributing a standalone bundle

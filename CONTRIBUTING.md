@@ -1,9 +1,9 @@
 # Contributing
 
-Forks, bug reports, and pull requests for purposes permitted by the
-[PolyForm Noncommercial License 1.0.0](LICENSE) are welcome. By submitting a
-contribution, you agree to license it under the same terms. You retain your
-copyright and must have the right to submit the contribution under these terms.
+Forks, bug reports, and pull requests are welcome. By submitting a
+contribution, you agree to license it under the project's [MIT License](LICENSE).
+You retain your copyright and must have the right to submit the contribution
+under these terms.
 Keep any required third-party license and copyright notices intact.
 
 Use Python 3.11 or newer and [uv](https://docs.astral.sh/uv/):

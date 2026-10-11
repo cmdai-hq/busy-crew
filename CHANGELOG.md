@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- License the project under MIT instead of PolyForm Noncommercial.
 - Add a month-to-date token view: Start / Pause cycles sessions, today and
   this month, and the scroll wheel steps between them. Each token view names
   its period at the bottom.
