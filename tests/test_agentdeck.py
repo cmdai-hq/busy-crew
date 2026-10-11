@@ -55,9 +55,29 @@ class RenderingTests(unittest.TestCase):
         self.assertEqual(light.getpixel((10, 10))[:3], INK_ON_LIGHT)
         self.assertEqual(light.getpixel((30, 10))[:3], (120, 149, 255))
 
+    def test_small_tile_cells_still_draw(self):
+        from PIL import Image
+        from agentdeck.render import tiles
+        source = Image.new("RGB", (72, 16), (0, 0, 0))
+        source.putpixel((5, 5), (135, 221, 155))
+        for cell in (1, 2, 3, 4):
+            with self.subTest(cell=cell):
+                image = tiles(source, cell)
+                self.assertEqual(image.getpixel((5 * cell + cell // 2, 5 * cell + cell // 2)), (135, 221, 155, 255))
+
+    def test_bare_tiles_option_works_before_the_path(self):
+        from agentdeck import cli
+        for args, ground in [(["--tiles", "out.png"], "dark"), (["out.png", "--tiles"], "dark"), (["--tiles-light", "out.png"], "light")]:
+            with self.subTest(args=args), patch("sys.argv", ["busy-crew", "snapshot", *args]), \
+                    patch.object(cli, "load_json", return_value={}), \
+                    patch("agentdeck.device.Device.screen", return_value=bytes(72 * 16 * 3)), \
+                    patch("agentdeck.render.tiles") as tiles, patch("PIL.Image.Image.save"):
+                cli.main()
+                self.assertEqual(tiles.call_args.kwargs["ground"], ground)
+
     def test_snapshot_tiles_and_leds_are_exclusive(self):
         from agentdeck.cli import main
-        with patch("sys.argv", ["busy-crew", "snapshot", "out.png", "--tiles", "light", "--leds"]), \
+        with patch("sys.argv", ["busy-crew", "snapshot", "out.png", "--tiles-light", "--leds"]), \
                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             main()
 

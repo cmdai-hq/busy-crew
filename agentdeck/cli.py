@@ -53,8 +53,10 @@ def main():
     shot = sub.add_parser("snapshot"); shot.add_argument("path", type=Path)
     style = shot.add_mutually_exclusive_group()
     style.add_argument("--leds", action="store_true", help="round LEDs on a dark panel")
-    style.add_argument("--tiles", nargs="?", const="dark", choices=["dark", "light"],
-                       help="rounded tiles on a transparent ground, for a dark (default) or light page")
+    style.add_argument("--tiles", action="store_const", const="dark", dest="tiles",
+                       help="rounded tiles on a transparent ground, for a dark page")
+    style.add_argument("--tiles-light", action="store_const", const="light", dest="tiles",
+                       help="the same tiles with white drawn in dark ink, for a light page")
     demo = sub.add_parser("demo"); demo.add_argument("directory", type=Path)
     args = parser.parse_args()
     if args.command == "run":

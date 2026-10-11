@@ -104,15 +104,19 @@ def tiles(image, cell=20, ground="dark"):
     from PIL import Image, ImageDraw
     result = Image.new("RGBA", (image.width * cell, image.height * cell), (0, 0, 0, 0))
     draw = ImageDraw.Draw(result)
-    gap, radius = max(1, cell // 6), max(1, cell // 5)
+    # Below 4 pixels a cell has no room for a gap: tiles touch, as square pixels.
+    gap, radius = (max(1, cell // 6), cell // 5) if cell >= 4 else (0, 0)
     for y in range(image.height):
         for x in range(image.width):
             color = image.getpixel((x, y))[:3]
             if ground == "light" and min(color) >= 200:
                 color = INK_ON_LIGHT
             if any(color):  # An unlit LED stays transparent.
-                draw.rounded_rectangle((x * cell + gap, y * cell + gap, (x + 1) * cell - gap - 1, (y + 1) * cell - gap - 1),
-                                       radius=radius, fill=color)
+                box = (x * cell + gap, y * cell + gap, (x + 1) * cell - gap - 1, (y + 1) * cell - gap - 1)
+                if radius:
+                    draw.rounded_rectangle(box, radius=radius, fill=color)
+                else:
+                    draw.rectangle(box, fill=color)
     return result
 
 
