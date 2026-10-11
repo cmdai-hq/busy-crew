@@ -51,7 +51,12 @@ def main():
     sub.add_parser("refresh", help="refresh token totals now instead of within 2 minutes")
     view = sub.add_parser("view"); view.add_argument("name", choices=["sessions", "tokens", "month"])
     shot = sub.add_parser("snapshot"); shot.add_argument("path", type=Path)
-    shot.add_argument("--leds", action="store_true")
+    style = shot.add_mutually_exclusive_group()
+    style.add_argument("--leds", action="store_true", help="round LEDs on a dark panel")
+    style.add_argument("--tiles", action="store_const", const="dark", dest="tiles",
+                       help="rounded tiles on a transparent ground, for a dark page")
+    style.add_argument("--tiles-light", action="store_const", const="light", dest="tiles",
+                       help="the same tiles with white drawn in dark ink, for a light page")
     demo = sub.add_parser("demo"); demo.add_argument("directory", type=Path)
     args = parser.parse_args()
     if args.command == "run":
@@ -103,7 +108,10 @@ def main():
             raise SystemExit("Configuration is invalid; check config.json") from None
         rgb = Device(config.get("address", "http://busybar.local"), config.get("token")).screen()
         image = Image.frombytes("RGB", (72, 16), rgb)
-        if args.leds:
+        if args.tiles:
+            from .render import tiles
+            image = tiles(image, ground=args.tiles)
+        elif args.leds:
             result = Image.new("RGB", (1008, 224), "#070b10")
             draw = ImageDraw.Draw(result)
             for y in range(16):

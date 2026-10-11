@@ -3,7 +3,7 @@
 **See what your Claude Code and Codex agents are doing at a glance, on the LED strip of your [BUSY Bar](https://busy.app).** Each session is a little character: working, waiting for you, or done.
 
 <p align="center">
-  <img src="docs/duo.png" width="576" alt="Busy Crew on a BUSY Bar: 7 Claude sessions and 3 Codex conversations, with their states">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="docs/duo.png"><img src="docs/duo-light.png" width="720" alt="Busy Crew on a BUSY Bar: 3 Claude sessions and 3 Codex conversations, with their states"></picture>
 </p>
 
 Your Mac reads Claude Code and Codex activity locally and sends a 72 × 16 pixel frame to the bar. No conversation content leaves your Mac and no cloud service is involved. Busy Crew is an independent project, not affiliated with BUSY, Anthropic or OpenAI.
@@ -14,12 +14,12 @@ When both families are active, the **duo** view above shows each family's count 
 
 <table>
   <tr>
-    <td align="center"><img src="docs/claude-team.png" width="360" alt="Claude only: one working session, four finished, +2 more"><br>Claude only</td>
-    <td align="center"><img src="docs/codex-team.png" width="360" alt="Codex only: one working, one finished, one failed"><br>Codex only</td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/claude-team.png"><img src="docs/claude-team-light.png" width="360" alt="Claude only: one working session and two finished"></picture><br>Claude only</td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/codex-team.png"><img src="docs/codex-team-light.png" width="360" alt="Codex only: one working conversation and two finished"></picture><br>Codex only</td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/tokens-today.png" width="360" alt="Tokens today: Claude 1.0G, Codex 396M"><br>Tokens today</td>
-    <td align="center"><img src="docs/tokens-month.png" width="360" alt="Tokens this month: Claude 9.1G, Codex 1.7G"><br>Tokens this month</td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/tokens-today.png"><img src="docs/tokens-today-light.png" width="360" alt="Tokens today: Claude 1.2G, Codex 578M"></picture><br>Tokens today</td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/tokens-month.png"><img src="docs/tokens-month-light.png" width="360" alt="Tokens this month: Claude 9.3G, Codex 1.8G"></picture><br>Tokens this month</td>
   </tr>
 </table>
 
@@ -32,7 +32,7 @@ When both families are active, the **duo** view above shows each family's count 
 | Gray `?` | Failed turn, unknown state or unreadable source |
 | `+N` | More sessions than the six slots |
 
-Token totals are shown in K (thousand), M (million) or G (billion) and include cache tokens. These captures are real: `uv run busy-crew snapshot --leds` on the author's bar.
+Token totals are shown in K (thousand), M (million) or G (billion) and include cache tokens. These captures are real: `uv run busy-crew snapshot docs/duo.png --tiles` on the author's bar.
 
 ## Requirements
 

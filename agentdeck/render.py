@@ -15,6 +15,7 @@ MINI_CODEX = ["00BB0BB00", "0BBBBBBB0", "BBBvvvBBB", "BBvCvCvBB", "BBvvvvvBB",
 # Dimming paints sprites gray. Codex's painted visor and mouth ("m", cyan like the
 # eyes when lit) become holes, so the eyes stand out on the visor and the mouth on the body.
 DIM = {"v": ".", "m": "."}
+INK_ON_LIGHT = (36, 41, 47)  # White pixels drawn on a light page.
 FONT = {
     "0": ["111", "101", "101", "101", "111"], "1": ["010", "110", "010", "010", "111"],
     "2": ["111", "001", "111", "100", "111"], "3": ["111", "001", "111", "001", "111"],
@@ -78,10 +79,12 @@ class Frame:
         return bytes(component for row in self.rows for v in row
                      for component in bytes.fromhex(PALETTE[v][1:]))
 
-    def save(self, path, scale=1, leds=False):
+    def save(self, path, scale=1, leds=False, tiled=None):
         from PIL import Image, ImageDraw
         img = Image.frombytes("RGB", (72, 16), self.rgb())
-        if leds:
+        if tiled:  # "dark" or "light": the page the tiles will sit on.
+            img = tiles(img, scale if scale > 1 else 20, tiled)
+        elif leds:
             img = Image.new("RGB", (72 * scale, 16 * scale), "#070b10")
             draw = ImageDraw.Draw(img)
             for y, row in enumerate(self.rows):
@@ -91,6 +94,30 @@ class Frame:
         elif scale != 1:
             img = img.resize((72 * scale, 16 * scale), Image.Resampling.NEAREST)
         img.save(path)
+
+
+def tiles(image, cell=20, ground="dark"):
+    """Each lit pixel as a rounded tile on a transparent ground, the way the LEDs read on the bar.
+
+    White text vanishes on a light page, so ground="light" draws white pixels in dark ink.
+    """
+    from PIL import Image, ImageDraw
+    result = Image.new("RGBA", (image.width * cell, image.height * cell), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(result)
+    # Below 4 pixels a cell has no room for a gap: tiles touch, as square pixels.
+    gap, radius = (max(1, cell // 6), cell // 5) if cell >= 4 else (0, 0)
+    for y in range(image.height):
+        for x in range(image.width):
+            color = image.getpixel((x, y))[:3]
+            if ground == "light" and min(color) >= 200:
+                color = INK_ON_LIGHT
+            if any(color):  # An unlit LED stays transparent.
+                box = (x * cell + gap, y * cell + gap, (x + 1) * cell - gap - 1, (y + 1) * cell - gap - 1)
+                if radius:
+                    draw.rounded_rectangle(box, radius=radius, fill=color)
+                else:
+                    draw.rectangle(box, fill=color)
+    return result
 
 
 def number(n):
