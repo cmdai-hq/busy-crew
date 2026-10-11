@@ -86,7 +86,19 @@ uv run busy-crew snapshot front.png --leds
 
 A `✓` counts toward its family's total until you acknowledge it, the session starts new work, or it goes away (a closed Claude process, an archived Codex conversation, or a Codex response finished more than two hours ago). [How results and acknowledgment work](docs/how-it-works.md#results-and-acknowledgment).
 
-**Optional:** a [menu bar icon](docs/menu-bar.md) shows whether the collector is running, why it isn't, and lets you acknowledge, refresh tokens or reload it.
+### Menu bar icon
+
+Optional. When the bar goes dark, the icon in your macOS menu bar says why: running, paused by the selector, degraded, stopped, or waiting for a reload after an update. Its menu shows each family's sessions and today's tokens, and lets you acknowledge results, recount tokens, reload the collector or open the log.
+
+<p align="center">
+  <img src="docs/menu-bar.png" width="540" alt="Busy Crew's menu, open from the macOS menu bar: Running, started 6 minutes ago; Claude 1 working, 2 done, 1 idle; Codex 3 working, 1 done; today's tokens; Acknowledge results, Refresh tokens now, Reload collector, Open log, Quit menu icon">
+</p>
+
+```sh
+uv run busy-crew menubar install   # needs the Swift compiler: xcode-select --install
+```
+
+[Icon states, actions and updates](docs/menu-bar.md). The picture is a simulation of the real menu.
 
 ## Configuration
 
