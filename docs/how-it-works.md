@@ -72,6 +72,8 @@ candidate under the hook writer's lock and skips a busy lock. Empty lock files
 are retained: deleting one could let concurrent hooks lock different inodes.
 An unavailable or incompatible registry directory remains a source error and
 disables absence-based deletion, while cleanup by maximum age still runs.
+An initially absent directory is normal, but absence-based deletion still waits
+until an existing registry is read successfully.
 After cleanup, a new prompt or resumed tool activity creates a new random turn
 ID, so an earlier acknowledgment cannot hide its next result.
 

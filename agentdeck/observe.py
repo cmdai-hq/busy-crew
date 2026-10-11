@@ -580,11 +580,11 @@ class Observer:
         hooks, result, seen = self._hooks(), [], set()
         try:
             files = self._files(self.claude_root / "sessions", "claude")
+            registry_complete = self.known_sources["claude"]  # An initially absent source was not read.
         except (OSError, ValueError, TypeError) as exc:
             self._error("claude", exc)
             self._prune_hooks(seen, registry_complete=False)
             return result  # Preserve session ledgers while the source is unavailable.
-        registry_complete = True  # Hook errors cannot conceal native registry entries.
         for path in files:
             try:
                 data = load_json(path)

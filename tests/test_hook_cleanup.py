@@ -187,6 +187,21 @@ class HookCleanupTests(unittest.TestCase):
         self.assertEqual(self.observer.poll()[0].state, "working")
         self.assertFalse(self.observer.errors)
 
+    def test_initially_absent_registry_cannot_establish_orphanhood(self):
+        """No registry is initially normal, but cannot prove absence of a hooked session."""
+        expired = self.emit("expired", self.now - 86401)
+        orphan = self.emit("orphan", self.now - 7200)
+        self.assertEqual(self.observer.poll(), [])
+        self.assertFalse(expired.exists())
+        self.assertTrue(orphan.exists())
+        self.assertFalse(self.observer.errors)
+        # A successful read of an existing empty registry can now prove absence.
+        (self.claude / "sessions").mkdir(parents=True)
+        self.now += 3600
+        self.assertEqual(self.observer.poll(), [])
+        self.assertFalse(orphan.exists())
+        self.assertFalse(self.observer.errors)
+
     def test_registry_enumeration_failure_still_allows_age_expiry(self):
         """Unreadable registry directories disable absence decisions, not age expiry."""
         self.native("live")

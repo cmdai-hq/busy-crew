@@ -53,7 +53,8 @@ those older than 24 hours, and those older than an hour whose session is
 absent from Claude's native registry. Unreadable snapshots are retained and
 reported as a source error; an unreadable registry prevents deletion based on
 absence. Age-based cleanup continues even when the registry directory disappears
-or cannot be read. A hook currently writing is skipped until a later check. Empty lock
+or cannot be read. An initially absent registry is normal, but cannot establish
+orphanhood either. A hook currently writing is skipped until a later check. Empty lock
 files remain after their snapshots are deleted.
 
 `uninstall` keeps this folder so you can recover a backup; delete it yourself when you no longer need it.
