@@ -37,7 +37,7 @@ unit tests and wheel smoke tests do not establish those results.
 1. In a pull request, bump `version` in `pyproject.toml`, run `uv lock`, and
    move the CHANGELOG's "Unreleased" notes under the new version.
 2. Merge it, then publish a GitHub release whose tag is `v` plus that version
-   (`gh release create v1.2.3 --notes-from-tag` or the web form).
+   (`gh release create v1.2.3 --generate-notes` or the web form).
 3. The Release workflow does the rest. It checks that the tag matches the
    version, tests, builds and publishes to PyPI. Then it opens a pull request on
    [cmdai-hq/homebrew-tap](https://github.com/cmdai-hq/homebrew-tap) that points
