@@ -3,7 +3,7 @@
 **See what your Claude Code and Codex agents are doing at a glance, on the LED strip of your [BUSY Bar](https://busy.app).** Each session is a little character: working, waiting for you, or done.
 
 <p align="center">
-  <img src="docs/busy-bar.jpg" width="576" alt="A BUSY Bar running Busy Crew: 4 Claude sessions and 3 Codex conversations, with their states">
+  <img src="https://raw.githubusercontent.com/cmdai-hq/busy-crew/main/docs/busy-bar.jpg" width="576" alt="A BUSY Bar running Busy Crew: 4 Claude sessions and 3 Codex conversations, with their states">
 </p>
 
 Your Mac reads Claude Code and Codex activity locally and sends a 72 × 16 pixel frame to the bar. No conversation content leaves your Mac and no cloud service is involved. Busy Crew is an independent project, not affiliated with BUSY, Anthropic or OpenAI.
@@ -14,12 +14,12 @@ When both families are active, the **duo** view above shows each family's count 
 
 <table>
   <tr>
-    <td align="center"><img src="docs/claude-team.png" width="360" alt="Claude only: one working session, four finished, +2 more"><br>Claude only</td>
-    <td align="center"><img src="docs/codex-team.png" width="360" alt="Codex only: one working, one finished, one failed"><br>Codex only</td>
+    <td align="center"><img src="https://raw.githubusercontent.com/cmdai-hq/busy-crew/main/docs/claude-team.png" width="360" alt="Claude only: one working session, four finished, +2 more"><br>Claude only</td>
+    <td align="center"><img src="https://raw.githubusercontent.com/cmdai-hq/busy-crew/main/docs/codex-team.png" width="360" alt="Codex only: one working, one finished, one failed"><br>Codex only</td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/tokens-today.png" width="360" alt="Tokens today: Claude 1.0G, Codex 396M"><br>Tokens today</td>
-    <td align="center"><img src="docs/tokens-month.png" width="360" alt="Tokens this month: Claude 9.1G, Codex 1.7G"><br>Tokens this month</td>
+    <td align="center"><img src="https://raw.githubusercontent.com/cmdai-hq/busy-crew/main/docs/tokens-today.png" width="360" alt="Tokens today: Claude 1.0G, Codex 396M"><br>Tokens today</td>
+    <td align="center"><img src="https://raw.githubusercontent.com/cmdai-hq/busy-crew/main/docs/tokens-month.png" width="360" alt="Tokens this month: Claude 9.1G, Codex 1.7G"><br>Tokens this month</td>
   </tr>
 </table>
 
@@ -32,26 +32,35 @@ When both families are active, the **duo** view above shows each family's count 
 | Gray `?` | Failed turn, unknown state or unreadable source |
 | `+N` | More sessions than the six slots |
 
-Token totals are shown in K (thousand), M (million) or G (billion) and include cache tokens. These captures are real, taken on the author's bar with commands like `uv run busy-crew snapshot docs/tokens-today.png --leds`.
+Token totals are shown in K (thousand), M (million) or G (billion) and include cache tokens. These captures are real, taken on the author's bar with commands like `busy-crew snapshot docs/tokens-today.png --leds`.
 
 ## Requirements
 
 - A Mac (macOS) and a [BUSY Bar](https://busy.app) on the same network
-- Python 3.11+ and [uv](https://docs.astral.sh/uv/)
+- [Homebrew](https://brew.sh), or Python 3.11+ and [uv](https://docs.astral.sh/uv/)
 - [Claude Code](https://code.claude.com) and/or the [Codex app](https://openai.com/codex/), used on this Mac
 - Optional: [ccusage](https://ccusage.com/) 20+ for the token views
 
-## Quick start
+## Install
+
+```sh
+brew install cmdai-hq/tap/busy-crew   # or: uv tool install busy-crew
+busy-crew install --address http://busybar.local --timezone Europe/Paris
+busy-crew status
+```
+
+Use your bar's address. Your agents appear on the bar within a few seconds.
+
+**Updating:** `brew upgrade busy-crew` or `uv tool upgrade busy-crew`, then reload the collector (**Reload collector** in the [menu bar icon](#menu-bar-icon), or `launchctl kickstart -k gui/$UID/local.busybar.agent-deck`). **Removing:** run `busy-crew uninstall` first, then `brew uninstall busy-crew` or `uv tool uninstall busy-crew`.
+
+**From a checkout**, to contribute or try unreleased changes, prefix every command in this README with `uv run`, and update with `git pull --ff-only && uv sync --locked`:
 
 ```sh
 git clone https://github.com/cmdai-hq/busy-crew.git
 cd busy-crew
 uv sync --locked
 uv run busy-crew install --address http://busybar.local --timezone Europe/Paris
-uv run busy-crew status
 ```
-
-Use your bar's address. Your agents appear on the bar within a few seconds.
 
 <details>
 <summary>What <code>install</code> changes on your Mac</summary>
@@ -60,7 +69,7 @@ Use your bar's address. Your agents appear on the bar within a few seconds.
 - **Claude Code hooks**, added to Claude's settings after a private backup. They record only status identifiers and timestamps, never prompts, and never block Claude. Existing hooks and settings are preserved; a conflicting edit fails with recovery copies. Use `--no-claude-hooks` to rely on Claude's session registry alone, with coarser waiting and result detection.
 - **A private state folder**, `~/Library/Application Support/BusyCrew`, for the configuration, backups and the log. Installations made before 1.0 keep `BusybarAgentDeck`.
 
-Re-running `install` keeps the saved address and time zone unless you pass new ones. `uv run busy-crew uninstall` removes the LaunchAgent and the hooks, and keeps the state folder.
+Re-running `install` keeps the saved address and time zone unless you pass new ones. `busy-crew uninstall` removes the LaunchAgent and the hooks, and keeps the state folder.
 </details>
 
 ## Using it
@@ -78,31 +87,31 @@ A session waiting for you always brings the sessions view back. No button answer
 The same from the terminal:
 
 ```sh
-uv run busy-crew view sessions   # or: tokens, month
-uv run busy-crew ack             # acknowledge the results on screen
-uv run busy-crew refresh         # recount tokens now
-uv run busy-crew snapshot front.png --leds
+busy-crew view sessions   # or: tokens, month
+busy-crew ack             # acknowledge the results on screen
+busy-crew refresh         # recount tokens now
+busy-crew snapshot front.png --leds
 ```
 
-A `✓` counts toward its family's total until you acknowledge it, the session starts new work, or it goes away (a closed Claude process, an archived Codex conversation, or a Codex response finished more than two hours ago). [How results and acknowledgment work](docs/how-it-works.md#results-and-acknowledgment).
+A `✓` counts toward its family's total until you acknowledge it, the session starts new work, or it goes away (a closed Claude process, an archived Codex conversation, or a Codex response finished more than two hours ago). [How results and acknowledgment work](https://github.com/cmdai-hq/busy-crew/blob/main/docs/how-it-works.md#results-and-acknowledgment).
 
 ### Menu bar icon
 
 Optional. When the bar goes dark, the icon in your macOS menu bar says why: running, paused by the selector, degraded, stopped, or waiting for a reload after an update. Its menu shows each family's sessions and today's tokens, and lets you acknowledge results, recount tokens, reload the collector or open the log.
 
 <p align="center">
-  <img src="docs/menu-bar.png" width="540" alt="Busy Crew's menu, open from the macOS menu bar: Running, started 6 minutes ago; Claude 1 working, 2 done, 1 idle; Codex 3 working, 1 done; today's tokens; Acknowledge results, Refresh tokens now, Reload collector, Open log, Quit menu icon">
+  <img src="https://raw.githubusercontent.com/cmdai-hq/busy-crew/main/docs/menu-bar.png" width="540" alt="Busy Crew's menu, open from the macOS menu bar: Running, started 6 minutes ago; Claude 1 working, 2 done, 1 idle; Codex 3 working, 1 done; today's tokens; Acknowledge results, Refresh tokens now, Reload collector, Open log, Quit menu icon">
 </p>
 
 ```sh
-uv run busy-crew menubar install   # needs the Swift compiler: xcode-select --install
+busy-crew menubar install   # needs the Swift compiler: xcode-select --install
 ```
 
-[Icon states, actions and updates](docs/menu-bar.md). The picture is a simulation of the real menu.
+[Icon states, actions and updates](https://github.com/cmdai-hq/busy-crew/blob/main/docs/menu-bar.md). The picture is a simulation of the real menu.
 
 ## Configuration
 
-`install` writes `config.json` in the state folder ([example](docs/config.example.json)):
+`install` writes `config.json` in the state folder ([example](https://github.com/cmdai-hq/busy-crew/blob/main/docs/config.example.json)):
 
 | Key | Purpose |
 | --- | --- |
@@ -117,13 +126,13 @@ Over HTTP the key travels unencrypted: use a trusted network, or HTTPS if your d
 
 ## Troubleshooting
 
-Start with `uv run busy-crew status`.
+Start with `busy-crew status`.
 
-- **The bar went dark:** check `status` first. The collector may have stopped, or it is running while the selector is on Off or Settings, or a higher-priority app owns the display. The [menu bar icon](docs/menu-bar.md) tells these apart at a glance.
+- **The bar went dark:** check `status` first. The collector may have stopped, or it is running while the selector is on Off or Settings, or a higher-priority app owns the display. The [menu bar icon](https://github.com/cmdai-hq/busy-crew/blob/main/docs/menu-bar.md) tells these apart at a glance.
 - **Token views show `?`:** ccusage is missing or failed; sessions still work. Set `ccusage` in `config.json`.
-- **`busy-crew` not found, or `invalid choice`:** you're running an older copy. `git pull --ff-only && uv sync --locked`, then use `uv run busy-crew` from the checkout. The pre-1.0 `agent-deck` command still works.
+- **`busy-crew` not found, or `invalid choice`:** you're running an older copy. Update it as above; from a checkout, use `uv run busy-crew`. The pre-1.0 `agent-deck` command still works.
 
-More, including Claude settings conflicts and recovery: [troubleshooting](docs/troubleshooting.md).
+More, including Claude settings conflicts and recovery: [troubleshooting](https://github.com/cmdai-hq/busy-crew/blob/main/docs/troubleshooting.md).
 
 ## How it works
 
@@ -132,9 +141,9 @@ More, including Claude settings conflicts and recovery: [troubleshooting](docs/t
 - **Tokens:** one ccusage daily report from the 1st of the month, refreshed every two minutes.
 - **The bar:** a frame through the BUSY Bar local API, with a 15-second lease so the bar recovers its own display if your Mac goes away.
 
-Limits worth knowing: Codex approval requests are only partly visible, cloud tasks and other machines aren't tracked. Details: [how it works](docs/how-it-works.md), [tested versions](docs/COMPATIBILITY.md).
+Limits worth knowing: Codex approval requests are only partly visible, cloud tasks and other machines aren't tracked. Details: [how it works](https://github.com/cmdai-hq/busy-crew/blob/main/docs/how-it-works.md), [tested versions](https://github.com/cmdai-hq/busy-crew/blob/main/docs/COMPATIBILITY.md).
 
-**Privacy:** Busy Crew talks only to your bar: frames, display cleanup and its button events, with the bar's API key if you set one. Apart from turn events and the questions an agent asks you, conversation content is never parsed, and nothing from it is stored, logged or sent. [What is read, kept and sent](docs/privacy.md).
+**Privacy:** Busy Crew talks only to your bar: frames, display cleanup and its button events, with the bar's API key if you set one. Apart from turn events and the questions an agent asks you, conversation content is never parsed, and nothing from it is stored, logged or sent. [What is read, kept and sent](https://github.com/cmdai-hq/busy-crew/blob/main/docs/privacy.md).
 
 ## Development
 
@@ -145,10 +154,10 @@ uv run busy-crew run              # run the collector in the foreground
 uv run busy-crew demo /tmp/demo   # fictional previews of each layout
 ```
 
-The tests never contact a device, run a model or touch your real agent data. CI runs them on macOS and Linux with Python 3.11 and 3.14. Verified on BUSY Bar firmware 1.2.4 (API 27.5.0). See [CONTRIBUTING](CONTRIBUTING.md) and [SECURITY](SECURITY.md).
+The tests never contact a device, run a model or touch your real agent data. CI runs them on macOS and Linux with Python 3.11 and 3.14. Verified on BUSY Bar firmware 1.2.4 (API 27.5.0). See [CONTRIBUTING](https://github.com/cmdai-hq/busy-crew/blob/main/CONTRIBUTING.md) and [SECURITY](https://github.com/cmdai-hq/busy-crew/blob/main/SECURITY.md).
 
 ## License
 
-[MIT](LICENSE). Contributions are welcome; see [CONTRIBUTING](CONTRIBUTING.md).
+[MIT](https://github.com/cmdai-hq/busy-crew/blob/main/LICENSE). Contributions are welcome; see [CONTRIBUTING](https://github.com/cmdai-hq/busy-crew/blob/main/CONTRIBUTING.md).
 
 The characters are drawn in code, inspired by Clawd and Codex. References: [BUSY Bar developer docs](https://docs.busy.app/bar/dev), [busylib](https://github.com/busy-app/busylib-py), [Claude Code hooks](https://code.claude.com/docs/en/hooks), [ccusage](https://ccusage.com/).

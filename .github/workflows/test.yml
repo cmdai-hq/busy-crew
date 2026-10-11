@@ -23,6 +23,7 @@ jobs:
         shell: bash
         run: |
           uv build
+          python3 -I tests/dist_contents.py dist
           uv venv "$RUNNER_TEMP/agent-deck-wheel" --python 3.11
           uv pip install --python "$RUNNER_TEMP/agent-deck-wheel/bin/python" dist/*.whl
           cd "$RUNNER_TEMP"
