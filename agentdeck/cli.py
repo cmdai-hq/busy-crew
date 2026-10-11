@@ -31,9 +31,9 @@ def current_status(runtime):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Claude / Codex on the BUSY Bar front display")
+    parser = argparse.ArgumentParser(description="Busy Crew: Claude / Codex on the BUSY Bar front display")
     try:
-        package_version = version("busybar-agent-deck")
+        package_version = version("busy-crew")
     except PackageNotFoundError:
         package_version = "development"
     parser.add_argument("--version", action="version", version="%(prog)s " + package_version)

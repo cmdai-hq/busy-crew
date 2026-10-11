@@ -1,7 +1,7 @@
-// Agent Deck menu bar status: shows the collector's health from status.json only.
+// Busy Crew menu bar status: shows the collector's health from status.json only.
 // It never reads Claude/Codex sources and never contacts the BUSY Bar.
-// Build: xcrun swiftc -swift-version 5 -O -o AgentDeckMenu AgentDeckMenu.swift
-// Headless check: AgentDeckMenu --state <status.json> prints the level and exits.
+// Build: xcrun swiftc -swift-version 5 -O -o BusyCrewMenu BusyCrewMenu.swift
+// Headless check: BusyCrewMenu --state <status.json> prints the level and exits.
 import AppKit
 import Foundation
 
@@ -98,7 +98,7 @@ struct Entry {
 
 /// The whole menu as data, shared by the status item and the headless `--menu` mode.
 func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date) -> [Entry] {
-    var entries = [Entry(title: "Agent Deck — " + (levelTitles[snapshot.level] ?? snapshot.level))]
+    var entries = [Entry(title: "Busy Crew — " + (levelTitles[snapshot.level] ?? snapshot.level))]
     entries += snapshot.reasons.map { Entry(title: "  " + $0) }
     if let startedAt = snapshot.startedAt, snapshot.level != "stopped" {
         let formatter = RelativeDateTimeFormatter()
@@ -183,8 +183,13 @@ func writePNG(_ image: NSImage, to url: URL) -> Bool {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let environment = ProcessInfo.processInfo.environment
-    lazy var stateDir = URL(fileURLWithPath: environment["AGENT_DECK_STATE"]
-        ?? NSString(string: "~/Library/Application Support/BusybarAgentDeck").expandingTildeInPath)
+    // The installer always sets AGENT_DECK_STATE; the fallback mirrors storage.default_state().
+    lazy var stateDir = URL(fileURLWithPath: environment["AGENT_DECK_STATE"] ?? {
+        let legacy = NSString(string: "~/Library/Application Support/BusybarAgentDeck").expandingTildeInPath
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: legacy, isDirectory: &isDirectory) && isDirectory.boolValue
+            ? legacy : NSString(string: "~/Library/Application Support/BusyCrew").expandingTildeInPath
+    }())
     lazy var serviceLabel = environment["AGENT_DECK_LABEL"] ?? "local.busybar.agent-deck"
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let menu = NSMenu()
@@ -209,7 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func refresh() {
         snapshot = Snapshot.load(stateDir.appendingPathComponent("status.json"), now: Date().timeIntervalSince1970)
-        let title = "Agent Deck: " + (levelTitles[snapshot.level] ?? snapshot.level)
+        let title = "Busy Crew: " + (levelTitles[snapshot.level] ?? snapshot.level)
         if let image = icon(for: snapshot.level) {
             statusItem.button?.image = image
             statusItem.button?.title = ""

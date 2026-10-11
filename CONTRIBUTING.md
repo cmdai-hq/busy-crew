@@ -23,9 +23,9 @@ files out of commits, issue attachments and test fixtures.
 For changes to an adapter, include a regression covering its observable result
 and failure behavior. Record the tested source version and distinguish internal
 file formats from supported public APIs. For render changes, generate the
-fictional previews with `uv run agent-deck demo /tmp/agent-deck-demo` and inspect
+fictional previews with `uv run busy-crew demo /tmp/busy-crew-demo` and inspect
 them at the native 72 × 16 resolution as well as enlarged. The README images in
-`docs/` are real captures (`agent-deck snapshot --leds`); do not overwrite them
+`docs/` are real captures (`busy-crew snapshot --leds`); do not overwrite them
 with fictional previews.
 
 CI tests Linux and macOS on Python 3.11 and 3.14. Device integration and real

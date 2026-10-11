@@ -14,7 +14,7 @@ def main():
     package = Path(agentdeck.__file__).resolve()
     if not package.is_relative_to(Path(sys.prefix).resolve()):
         raise RuntimeError("Smoke test imported the checkout instead of the wheel")
-    if not (package.parent / "menubar" / "AgentDeckMenu.swift").is_file():
+    if not (package.parent / "menubar" / "BusyCrewMenu.swift").is_file():
         raise RuntimeError("The menu bar app source is missing from the wheel")
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

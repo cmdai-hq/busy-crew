@@ -4,8 +4,19 @@ import tempfile
 from pathlib import Path
 
 
+STATE_ROOT = "~/Library/Application Support/"
+# Installations made before 1.0 keep their folder: the LaunchAgent and hooks pin it.
+LEGACY_STATE = STATE_ROOT + "BusybarAgentDeck"
+
+
+def default_state():
+    legacy = Path(LEGACY_STATE).expanduser()
+    return legacy if legacy.is_dir() else Path(STATE_ROOT + "BusyCrew").expanduser()
+
+
 def state_dir():
-    path = Path(os.environ.get("AGENT_DECK_STATE", "~/Library/Application Support/BusybarAgentDeck")).expanduser()
+    configured = os.environ.get("BUSY_CREW_STATE") or os.environ.get("AGENT_DECK_STATE")
+    path = Path(configured).expanduser() if configured else default_state()
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.chmod(0o700)
     return path

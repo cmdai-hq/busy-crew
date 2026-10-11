@@ -1,6 +1,6 @@
 # Compatibility and distribution
 
-Agent Deck's installer supports macOS and Python 3.11+. CI covers Python 3.11
+Busy Crew's installer supports macOS and Python 3.11+. CI covers Python 3.11
 and 3.14 on macOS and Linux using synthetic data; Linux is a test environment,
 not a supported LaunchAgent installation target.
 

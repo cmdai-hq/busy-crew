@@ -21,7 +21,7 @@ A `✓` **counts toward its family's total.** For example, "Codex 5" can mean fi
 To acknowledge, use any of these:
 - press the scroll wheel (the bar's OK / Skip);
 - choose **Acknowledge results** in the [menu bar icon](menu-bar.md);
-- run `uv run agent-deck ack`.
+- run `uv run busy-crew ack`.
 
 Only the results the bar is showing are acknowledged, so nothing is acknowledged while it shows token totals. A session that needs you brings the sessions view back even when tokens are selected, and the results then on screen can be acknowledged.
 
@@ -40,7 +40,7 @@ At its first startup, the monitor ignores old completed responses. A transition 
 
 Two token views show totals **by agent family**: today (labelled `TODAY`), and the calendar month to date, from the 1st through today (labelled `MONTH`). The month count starts again on the 1st.
 
-- Both come from a single [ccusage](https://ccusage.com/) `daily --by-agent` report, refreshed every two minutes. `agent-deck refresh`, or **Refresh tokens now** in the menu bar icon, recounts them within a couple of seconds. Only one ccusage run happens at a time: a request made while one is running joins it.
+- Both come from a single [ccusage](https://ccusage.com/) `daily --by-agent` report, refreshed every two minutes. `busy-crew refresh`, or **Refresh tokens now** in the menu bar icon, recounts them within a couple of seconds. Only one ccusage run happens at a time: a request made while one is running joins it.
 - Totals use ccusage's `totalTokens`, which includes cache tokens. They are shown in K (thousand), M (million) or G (billion).
 - There is no instantaneous rate, context size or remaining subscription quota, and no cost is extrapolated for a model without known pricing.
 - A family with usage earlier in the month shows 0 for a day without any. An error, stale data, or a change of day produces a `?`.
@@ -70,7 +70,7 @@ A source error never reuses the last known count. See [compatibility notes](COMP
 
 ## Display lease and privacy
 
-Bitmaps have a 15-second lease; the loop targets a renewal every 5 seconds, subject to observation and I/O delays. If the Mac or program becomes unavailable, the firmware lease expires and the bar goes back to its own display. A higher-priority application can take over; the program does not raise its priority to displace it, and cleanup is scoped to Agent Deck. There is no custom display on the rear screen.
+Bitmaps have a 15-second lease; the loop targets a renewal every 5 seconds, subject to observation and I/O delays. If the Mac or program becomes unavailable, the firmware lease expires and the bar goes back to its own display. A higher-priority application can take over; the program does not raise its priority to displace it, and cleanup is scoped to Busy Crew. There is no custom display on the rear screen.
 
 The program reads the local files needed for tracking and ccusage, but does not copy them into the repository or send any conversation content to the bar. It sends only pixels. It does not change the bar's brightness, network, or WARP settings, and uses no BUSY cloud access. REST redirects are refused, so the API key is never forwarded to another host.
 

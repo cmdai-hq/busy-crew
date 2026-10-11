@@ -1,17 +1,17 @@
 # Troubleshooting and recovery
 
-Run `uv run agent-deck --version` and `uv run agent-deck status` first. Status omits conversation identifiers and reports source, input and device errors separately. Check the private runtime log (`service.log` in the state folder) when the service cannot start; redact local paths and secrets before sharing diagnostics.
+Run `uv run busy-crew --version` and `uv run busy-crew status` first. Status omits conversation identifiers and reports source, input and device errors separately. Check the private runtime log (`service.log` in the state folder) when the service cannot start; redact local paths and secrets before sharing diagnostics.
 
 ## Common problems
 
-**The bar went dark.** Check `agent-deck status` first; the [menu bar icon](menu-bar.md) shows the same at a glance. Three causes look alike on the bar:
+**The bar went dark.** Check `busy-crew status` first; the [menu bar icon](menu-bar.md) shows the same at a glance. Three causes look alike on the bar:
 - the collector stopped, so its 15-second display lease expired (no fresh `status.json`, menu bar `xmark.circle`);
 - the collector is running but the selector is on Off or Settings, which clears the display (`"paused": true`, menu bar `pause.circle`);
 - the collector is running but a higher-priority application owns the display; Busy Crew does not raise its priority to take it back.
 
 **Token views show `?`.** `ccusage` is missing, failed, or its data is stale. It is optional: its failure affects the token views, not session monitoring. Set its absolute path as `ccusage` in `config.json` if the LaunchAgent cannot find it.
 
-**`agent-deck: error: argument command: invalid choice: 'menubar'` (or `'refresh'`).** The command comes from an older checkout or from another installed copy. Check that `git remote -v` points to `cmdai-hq/busy-crew`. Then run `git switch main && git pull --ff-only` and `uv sync --locked`, and always launch it with `uv run agent-deck …` from the checkout.
+**`busy-crew: command not found`, or `invalid choice: 'menubar'` (or `'refresh'`).** The command comes from an older checkout or from another installed copy. Check that `git remote -v` points to `cmdai-hq/busy-crew`. Then run `git switch main && git pull --ff-only` and `uv sync --locked`, and always launch it with `uv run busy-crew …` from the checkout. The pre-1.0 `agent-deck` command remains an alias.
 
 **A Claude session's hooks don't seem active.** For an already open session, check that they appear in `/hooks`; restarting that session loads the new configuration.
 

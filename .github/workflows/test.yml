@@ -26,6 +26,7 @@ jobs:
           uv venv "$RUNNER_TEMP/agent-deck-wheel" --python 3.11
           uv pip install --python "$RUNNER_TEMP/agent-deck-wheel/bin/python" dist/*.whl
           cd "$RUNNER_TEMP"
-          "$RUNNER_TEMP/agent-deck-wheel/bin/agent-deck" --help
-          "$RUNNER_TEMP/agent-deck-wheel/bin/agent-deck" demo "$RUNNER_TEMP/agent-deck-demo"
+          "$RUNNER_TEMP/agent-deck-wheel/bin/busy-crew" --help
+          "$RUNNER_TEMP/agent-deck-wheel/bin/agent-deck" --help  # pre-1.0 alias
+          "$RUNNER_TEMP/agent-deck-wheel/bin/busy-crew" demo "$RUNNER_TEMP/agent-deck-demo"
           "$RUNNER_TEMP/agent-deck-wheel/bin/python" -I "$GITHUB_WORKSPACE/tests/wheel_smoke.py"
