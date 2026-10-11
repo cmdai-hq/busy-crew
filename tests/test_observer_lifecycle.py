@@ -532,12 +532,12 @@ class LifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "boundary"):
                 read_turn(path, "turn")
 
-    def test_pending_codex_completion_survives_24h_and_restart_until_ack(self):
+    def test_pending_codex_completion_survives_restart_until_ack_or_archive(self):
         self.codex_fixture([event("task_started", turn_id="turn"), event("task_complete", turn_id="turn")], "completed", self.now + 1)
         self.now += 1
         first = self.observer.poll()[0]
         self.assertEqual(first.state, "ready")
-        self.now += 86401
+        self.now += 3600
         observer = self.new_observer()
         self.assertEqual(observer.poll(), [first])
         observer.acknowledge([first])
@@ -550,6 +550,43 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(observer.acks)
         self.assertFalse(observer.tail_cache)
         self.assertFalse(observer.previous)
+
+    def test_silent_codex_completion_dies_after_two_hours(self):
+        self.codex_fixture([event("task_started", turn_id="turn"), event("task_complete", turn_id="turn")], "completed", self.now + 1)
+        self.now += 1
+        self.assertEqual(self.observer.poll()[0].state, "ready")
+        self.now += 7201
+        self.assertEqual(self.new_observer().poll(), [])
+        self.assertFalse(load_json(self.runtime / "completions.json"))
+
+    def test_pending_codex_result_beyond_the_recent_page_is_kept(self):
+        self.codex_fixture([event("task_started", turn_id="turn"), event("task_complete", turn_id="turn")], "completed", self.now + 1)
+        self.now += 1
+        first = self.observer.poll()[0]
+        with closing(sqlite3.connect(self.codex / "state_5.sqlite")) as db:
+            db.executemany("INSERT INTO threads VALUES(?,?,?,?,?,?)",
+                           [(f"other{i}", str(self.rollout), self.now, 0, None, "user") for i in range(200)])
+            db.commit()
+        self.assertEqual(self.observer.poll(), [first])
+        self.assertIn("codex:c", self.observer.results)
+
+    def test_touched_old_codex_conversation_does_not_revive_its_result(self):
+        self.codex_fixture([event("task_started", turn_id="turn"), event("task_complete", turn_id="turn")], "completed", self.now + 1)
+        self.now += 1
+        self.assertEqual(self.observer.poll()[0].state, "ready")
+        self.now += 7201
+        with closing(sqlite3.connect(self.codex / "state_5.sqlite")) as db:
+            db.execute("UPDATE threads SET updated_at=?", (self.now,))  # For example, a rename.
+            db.commit()
+        os.utime(self.rollout, (self.now, self.now))
+        self.assertEqual(self.observer.poll(), [])
+        self.assertFalse(self.observer.results)
+
+    def test_failed_codex_turn_dies_after_two_hours(self):
+        self.codex_fixture([event("task_started", turn_id="turn"), event("turn_aborted", turn_id="turn")], "interrupted", self.now)
+        self.assertEqual(self.observer.poll()[0].state, "unknown")
+        self.now += 7201
+        self.assertEqual(self.observer.poll(), [])
 
     def test_new_turn_and_rotated_same_size_rollout_invalidate_cache(self):
         self.codex_fixture([event("task_started", turn_id="turn"), function("function_call", name="request_user_input", call_id="q")])

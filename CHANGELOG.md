@@ -5,6 +5,8 @@
 - Add a month-to-date token view: Start / Pause cycles sessions, today and
   this month, and the scroll wheel steps between them. Each token view names
   its period at the bottom.
+- Treat a finished or failed Codex conversation silent for two hours as dead:
+  it leaves the count with its `✓`, instead of piling up until acknowledged.
 - Keep open Claude sessions visible after work completes and after acknowledgment;
   show a sleeping indicator when the Claude family is entirely idle.
 - Isolate global hook imports, record owned hook commands, respect custom roots,
