@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 — 2026-10-11
 
+- Install without a checkout: `brew install cmdai-hq/tap/busy-crew` or
+  `uv tool install busy-crew`, then `busy-crew install`. Each GitHub release
+  now publishes the package to PyPI and updates the Homebrew formula.
 - Offer new releases: once a day the collector asks GitHub for the latest
   release (no credentials, no data about your agents; `"update_check": false`
   in `config.json` turns it off). The menu bar icon then shows "Version X
@@ -13,10 +16,8 @@
   formula's `opt` link instead. `--python` or `BUSY_CREW_PYTHON` choose
   another interpreter, and `install` checks that it can run Busy Crew before
   changing anything.
-- Publish to PyPI: `uv tool install busy-crew` installs it without a
-  checkout. A published GitHub release builds, tests and uploads the wheel
-  and sdist through PyPI trusted publishing. The README describes the
-  Homebrew, uv and checkout installs, and its links work on the PyPI page.
+- The README describes the Homebrew, uv and checkout installs, and its links
+  work on the PyPI page.
 
 ## 1.0.1 — 2026-10-11
 
