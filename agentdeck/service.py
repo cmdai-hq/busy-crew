@@ -17,6 +17,7 @@ from .model import layout
 from .observe import Observer
 from .render import render, visible_sessions
 from .storage import load_json, state_dir, write_bytes, write_json
+from .updates import UpdateCheck, install_mode, installed_version
 from .usage import Usage
 
 LOG = logging.getLogger("agentdeck")
@@ -63,6 +64,8 @@ class Service:
         self.observer = Observer(self.runtime, claude_root=self.config.get("claude_dir"),
                                  codex_root=self.config.get("codex_dir"))
         self.usage = Usage(self.config.get("timezone", "Europe/Paris"), self.config.get("ccusage"))
+        self.updates = UpdateCheck(self.runtime, installed_version(), self.config.get("update_check", True) is not False)
+        self.install_mode = install_mode()
         self.view = "sessions"
         self.paused = False
         self.inputs_connected = False
@@ -239,6 +242,8 @@ class Service:
             inbox.mkdir(exist_ok=True, mode=0o700)
             threading.Thread(target=self.usage_loop, daemon=True).start()
             threading.Thread(target=self.inputs_worker, daemon=True).start()
+            if self.updates.enabled:
+                threading.Thread(target=self.updates.loop, args=(self.stop,), daemon=True).start()
             LOG.info("Service started")
             last_frame, last_draw, last_error = None, 0, None
             started_at, code_changed, checked_at = time.time(), False, None
@@ -296,6 +301,8 @@ class Service:
                     "inputs_error": self.inputs_error,
                     "events_dropped": self.events_dropped, "last_control": self.last_control,
                     "pid": os.getpid(), "started_at": started_at, "code_changed": code_changed,
+                    "version": self.updates.current, "latest_version": self.updates.available(),
+                    "install_mode": self.install_mode,
                     # What OK would acknowledge now, so the menu never offers a silent no-op.
                     "acknowledgeable": sum(s.state == "ready" for s in self.presented_sessions)}
                 status["health"] = health(status, time.time(), started_at)

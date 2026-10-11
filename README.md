@@ -88,7 +88,7 @@ A `✓` counts toward its family's total until you acknowledge it, the session s
 
 ### Menu bar icon
 
-Optional. When the bar goes dark, the icon in your macOS menu bar says why: running, paused by the selector, degraded, stopped, or waiting for a reload after an update. Its menu shows each family's sessions and today's tokens, and lets you acknowledge results, recount tokens, reload the collector or open the log.
+Optional. When the bar goes dark, the icon in your macOS menu bar says why: running, paused by the selector, degraded, stopped, or waiting for a reload after an update. Its menu shows each family's sessions and today's tokens, and lets you acknowledge results, recount tokens, reload the collector, open the log, or install a new release.
 
 <p align="center">
   <img src="docs/menu-bar.png" width="540" alt="Busy Crew's menu, open from the macOS menu bar: Running, started 6 minutes ago; Claude 1 working, 2 done, 1 idle; Codex 3 working, 1 done; today's tokens; Acknowledge results, Refresh tokens now, Reload collector, Open log, Quit menu icon">
@@ -110,6 +110,7 @@ uv run busy-crew menubar install   # needs the Swift compiler: xcode-select --in
 | `timezone` | Time zone for "today" and "this month" |
 | `ccusage` | Absolute path to `ccusage`, if the LaunchAgent cannot find it |
 | `token` | The bar's local API key, if LAN access requires one |
+| `update_check` | `false` stops the daily check for a new release on GitHub |
 
 Over HTTP the key travels unencrypted: use a trusted network, or HTTPS if your device supports it. The busylib WebSocket SDK puts the key in a URL query and honors proxy environment variables; don't share those URLs or proxy logs.
 
@@ -134,7 +135,7 @@ More, including Claude settings conflicts and recovery: [troubleshooting](docs/t
 
 Limits worth knowing: Codex approval requests are only partly visible, cloud tasks and other machines aren't tracked. Details: [how it works](docs/how-it-works.md), [tested versions](docs/COMPATIBILITY.md).
 
-**Privacy:** Busy Crew talks only to your bar: frames, display cleanup and its button events, with the bar's API key if you set one. Apart from turn events and the questions an agent asks you, conversation content is never parsed, and nothing from it is stored, logged or sent. [What is read, kept and sent](docs/privacy.md).
+**Privacy:** Busy Crew talks to your bar: frames, display cleanup and its button events, with the bar's API key if you set one. Once a day it asks GitHub for the number of its latest release; `"update_check": false` turns that off. Apart from turn events and the questions an agent asks you, conversation content is never parsed, and nothing from it is stored, logged or sent. [What is read, kept and sent](docs/privacy.md).
 
 ## Development
 

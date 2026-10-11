@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Offer new releases: once a day the collector asks GitHub for the latest
+  release (no credentials, no data about your agents; `"update_check": false`
+  in `config.json` turns it off). The menu bar icon then shows "Version X
+  available" and **Update to X**, which runs the new `busy-crew upgrade`:
+  `brew upgrade` or `uv tool upgrade`, then `install` with the new version and
+  a reinstall of the menu bar app. A failed check never degrades the status.
 - `install` and `menubar install` write an interpreter path that survives
   package upgrades: inside Homebrew's versioned `Cellar` folder, they use the
   formula's `opt` link instead. `--python` or `BUSY_CREW_PYTHON` choose

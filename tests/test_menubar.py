@@ -309,6 +309,18 @@ class SwiftAppTests(unittest.TestCase):
         self.assertIn("[ ] Acknowledge results", self.menu(None))
         self.assertIn("[x] Reload collector", self.menu(None))
 
+    def test_update_entry_follows_the_installation_mode(self):
+        status = {"at": time.time(), "sessions": [], "latest_version": "1.1.0",
+                  "health": {"level": "update", "reasons": ["Version 1.1.0 available"]}}
+        for mode in ["homebrew", "uv"]:
+            with self.subTest(mode=mode):
+                self.assertIn("[x] Update to 1.1.0", [line.strip() for line in self.menu(dict(status, install_mode=mode))])
+        checkout = [line.strip() for line in self.menu(dict(status, install_mode="checkout"))]
+        self.assertIn("To update: git pull && uv sync --locked", checkout)
+        self.assertFalse(any("Update to" in line for line in checkout))
+        for content in [dict(status, install_mode=None), dict(status, latest_version=None, install_mode="homebrew")]:
+            self.assertFalse(any("Update to" in line or "To update" in line for line in self.menu(content)))
+
     def level(self, content):
         path = Path(self.temp.name) / "status.json"
         path.unlink(missing_ok=True)

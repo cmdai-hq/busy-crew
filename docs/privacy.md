@@ -1,6 +1,6 @@
 # Privacy
 
-Busy Crew runs on your Mac and talks to one device: your BUSY Bar, at the address in `config.json`. There is no telemetry, no cloud service, no update check and no account.
+Busy Crew runs on your Mac and talks to your BUSY Bar, at the address in `config.json`. Once a day it also asks GitHub for the number of its latest release. There is no telemetry, no cloud service and no account.
 
 ## What is sent
 
@@ -9,6 +9,8 @@ Busy Crew runs on your Mac and talks to one device: your BUSY Bar, at the addres
 | Your BUSY Bar | A 72 × 16 pixel frame, and requests to clear Busy Crew's own frame | HTTP on your network, with the bar's API key in a header if you set one |
 | Your BUSY Bar | A subscription to its button events (OK, Back, Start, the wheel, the selector) | WebSocket through the busylib SDK, which puts the key in the URL query |
 | Your BUSY Bar, only when you run `snapshot` | A request for the bar's current screen | HTTP, as above |
+| GitHub (`api.github.com`), at most once a day | A request for Busy Crew's latest release, with Busy Crew's version in the `User-Agent` header. No data about your agents or your bar | HTTPS, without credentials. GitHub sees your IP address. `"update_check": false` in `config.json` turns it off |
+| Homebrew or PyPI, only when you choose **Update to X** in the menu bar icon or run `busy-crew upgrade` | What `brew upgrade` or `uv tool upgrade` sends to download the new version | Run by those tools |
 
 Nothing else leaves the Mac. Over plain HTTP, someone on your network could see the frames, which show agent counts and token totals, and the API key. Use a trusted network, or HTTPS if your device supports it.
 
@@ -38,6 +40,8 @@ Everything lives in a private folder (directories `0700`, data files and locks `
 | `fingerprint.key` | The random per-installation key for those fingerprints, so a fingerprint cannot be matched against guessed commands |
 | `service.log` | Starts, stops and source or device status, with Busy Crew's own error messages only: never a path or conversation content |
 | `front.png` | The last frame sent to the bar |
+| `update.json` | When the latest release was last checked, and its version |
+| `upgrade.log` | The output of the last `busy-crew upgrade` |
 | `claude-settings-*.json`, `recovery/` | Backups of your Claude settings made before installing or removing hooks |
 
 `uninstall` keeps this folder so you can recover a backup; delete it yourself when you no longer need it.
