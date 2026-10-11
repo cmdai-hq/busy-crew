@@ -134,7 +134,7 @@ func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date, updating: 
             // `busy-crew upgrade` runs the package manager, then reinstalls with the new version.
             entries.append(Entry(title: "Update to \(latest)", action: #selector(AppDelegate.update), enabled: true))
         } else if snapshot.installMode == "checkout" {
-            entries.append(Entry(title: "To update: git pull && uv sync --locked"))
+            entries.append(Entry(title: "To update: git pull --ff-only && uv sync --locked, then uv run busy-crew install"))
         }
     }
     if snapshot.codeChanged {

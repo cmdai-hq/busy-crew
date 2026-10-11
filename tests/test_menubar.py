@@ -164,6 +164,17 @@ class MenuBarInstallTests(unittest.TestCase):
         self.assertEqual(plistlib.loads(self.plist.read_bytes())["EnvironmentVariables"]["AGENT_DECK_PYTHON"],
                          "/fictional/option/python")
 
+    def test_successful_install_clears_a_failed_update_marker(self):
+        marker = self.runtime / "menubar-update-failed"
+        marker.touch()
+        self.tools.compile_fails = True
+        with self.assertRaises(RuntimeError):
+            installer.install_menubar()
+        self.assertTrue(marker.exists())
+        self.tools.compile_fails = False
+        installer.install_menubar()
+        self.assertFalse(marker.exists())
+
     def test_missing_compiler_changes_nothing(self):
         self.tools.compiler_missing = True
         with self.assertRaisesRegex(RuntimeError, "xcode-select --install"):
@@ -316,7 +327,7 @@ class SwiftAppTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.assertIn("[x] Update to 1.1.0", [line.strip() for line in self.menu(dict(status, install_mode=mode))])
         checkout = [line.strip() for line in self.menu(dict(status, install_mode="checkout"))]
-        self.assertIn("To update: git pull && uv sync --locked", checkout)
+        self.assertIn("To update: git pull --ff-only && uv sync --locked, then uv run busy-crew install", checkout)
         self.assertFalse(any("Update to" in line for line in checkout))
         for content in [dict(status, install_mode=None), dict(status, latest_version=None, install_mode="homebrew")]:
             self.assertFalse(any("Update to" in line or "To update" in line for line in self.menu(content)))

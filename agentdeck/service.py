@@ -17,7 +17,7 @@ from .model import layout
 from .observe import Observer
 from .render import render, visible_sessions
 from .storage import load_json, state_dir, write_bytes, write_json
-from .updates import UpdateCheck, install_mode, installed_version
+from .updates import MENUBAR_FAILED, UpdateCheck, install_mode, installed_version
 from .usage import Usage
 
 LOG = logging.getLogger("agentdeck")
@@ -303,6 +303,7 @@ class Service:
                     "pid": os.getpid(), "started_at": started_at, "code_changed": code_changed,
                     "version": self.updates.current, "latest_version": self.updates.available(),
                     "install_mode": self.install_mode,
+                    "menubar_update_failed": (self.runtime / MENUBAR_FAILED).exists(),
                     # What OK would acknowledge now, so the menu never offers a silent no-op.
                     "acknowledgeable": sum(s.state == "ready" for s in self.presented_sessions)}
                 status["health"] = health(status, time.time(), started_at)

@@ -16,6 +16,8 @@ from .storage import load_json, write_json
 LOG = logging.getLogger("agentdeck")
 RELEASES = "https://api.github.com/repos/cmdai-hq/busy-crew/releases/latest"
 CHECK_EVERY = 86400  # One request a day.
+# Left by a failed detached menu bar reinstall, so the collector can report it; removed by a successful one.
+MENUBAR_FAILED = "menubar-update-failed"
 MAX_RESPONSE = 1_000_000
 
 
@@ -40,7 +42,10 @@ def fetch_latest(current, timeout=10):
         raw = response.read(MAX_RESPONSE + 1)
     if len(raw) > MAX_RESPONSE:
         raise ValueError("Release response exceeds limit")
-    tag = json.loads(raw).get("tag_name")
+    release = json.loads(raw)
+    if not isinstance(release, dict):
+        raise ValueError("Release response is not an object")
+    tag = release.get("tag_name")
     if parse_version(tag) is None:
         raise ValueError("Release tag is not a version")
     return ".".join(map(str, parse_version(tag)))
@@ -161,9 +166,24 @@ def upgrade(runtime):
                 if result.returncode:
                     raise RuntimeError(f"{name} failed; see {log_path}")
             if menubar_agent_path().exists():
-                # Reinstalling the app stops it and everything it started: run this step detached.
-                step = [python, "-I", "-m", "agentdeck.cli", "menubar", "install"]
+                # Reinstalling the app stops it and everything it started: run this step detached,
+                # and record a failure where the collector reports it.
+                step = [python, "-I", "-m", "agentdeck.updates", "menubar"]
                 print("$ " + " ".join(step), file=log, flush=True)
                 subprocess.Popen(step, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                  start_new_session=True)
     return mode
+
+
+def reinstall_menubar(runtime):
+    from .install import install_menubar
+    try:
+        install_menubar()
+    except Exception:
+        (runtime / MENUBAR_FAILED).touch(mode=0o600)
+        raise
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["menubar"]:
+    from .storage import state_dir
+    reinstall_menubar(state_dir())

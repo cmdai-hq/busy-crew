@@ -16,6 +16,8 @@ def health(status, now, started_at):
     update = ["New version on disk"] if status.get("code_changed") else []
     if status.get("latest_version"):
         update.append(f"Version {status['latest_version']} available")
+    if status.get("menubar_update_failed"):
+        update.append("Menu bar app update failed: see upgrade.log")
     paused = ["Paused by the bar selector"] if status.get("paused") else []
     level = "degraded" if degraded else "update" if update else "paused" if paused else "ok"
     return {"level": level, "reasons": degraded + update + paused}

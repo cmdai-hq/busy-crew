@@ -53,7 +53,7 @@ class ReleaseCheckTests(unittest.TestCase):
         self.assertIsNone(request.data)
 
     def test_fetch_rejects_a_tag_that_is_not_a_version_and_oversized_responses(self):
-        for raw in [json.dumps({"tag_name": "nightly"}).encode(), b"{" + b" " * updates.MAX_RESPONSE + b"}"]:
+        for raw in [json.dumps({"tag_name": "nightly"}).encode(), b"[]", b"null", b"{" + b" " * updates.MAX_RESPONSE + b"}"]:
             with self.subTest(size=len(raw)), patch.object(updates.urllib.request, "urlopen", return_value=Response(raw)):
                 with self.assertRaises(ValueError):
                     updates.fetch_latest("1.0.1")
@@ -234,7 +234,7 @@ class UpgradeTests(unittest.TestCase):
         plist.parent.mkdir(parents=True)
         plist.touch()
         updates.upgrade(self.runtime)
-        self.assertEqual(self.popen.call_args.args[0][-3:], ["agentdeck.cli", "menubar", "install"])
+        self.assertEqual(self.popen.call_args.args[0][-3:], ["-m", "agentdeck.updates", "menubar"])
         self.assertTrue(self.popen.call_args.kwargs["start_new_session"])
 
     def test_failed_package_upgrade_leaves_the_installation_alone(self):
@@ -260,11 +260,32 @@ class UpgradeTests(unittest.TestCase):
                 updates.upgrade(self.runtime)
         self.run.assert_not_called()
 
+    def test_failed_detached_menu_bar_reinstall_is_recorded_for_the_collector(self):
+        with patch("agentdeck.install.install_menubar", side_effect=RuntimeError("Swift compiler unavailable")):
+            with self.assertRaises(RuntimeError):
+                updates.reinstall_menubar(self.runtime)
+        self.assertTrue((self.runtime / updates.MENUBAR_FAILED).exists())
+        self.assertEqual(health({"inputs_connected": True, "menubar_update_failed": True}, 0, 0),
+                         {"level": "update", "reasons": ["Menu bar app update failed: see upgrade.log"]})
+
     def test_cli_reports_failures_without_a_traceback(self):
         self.mode.return_value = "checkout"
         with patch("agentdeck.cli.state_dir", return_value=self.runtime), patch("sys.argv", ["busy-crew", "upgrade"]):
             with self.assertRaisesRegex(SystemExit, "git checkout"):
                 cli.main()
+
+
+class ModuleEntryTests(unittest.TestCase):
+    def test_detached_reinstall_runs_as_a_module(self):
+        temp = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, temp)
+        result = subprocess.run([updates.sys.executable, "-I", "-c",
+                                 "import runpy, sys; sys.argv = ['x', 'menubar'];"
+                                 "import agentdeck.install as i; i.install_menubar = lambda: print('reinstalled');"
+                                 "runpy.run_module('agentdeck.updates', run_name='__main__')"],
+                                capture_output=True, text=True, timeout=30,
+                                env=dict(os.environ, BUSY_CREW_STATE=temp))
+        self.assertEqual((result.returncode, result.stdout), (0, "reinstalled\n"), result.stderr)
 
 
 if __name__ == "__main__":
