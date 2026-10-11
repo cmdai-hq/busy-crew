@@ -564,6 +564,31 @@ class LifecycleTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "exceeds size limit"):
                     read_turn(path, "turn")
 
+    def test_nested_header_cannot_make_an_oversized_turn_event_skippable(self):
+        record = {"metadata": {"type": "response_item", "payload": {"type": "message"}},
+                  "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn", "output": "x" * 2_100_000}}
+        path = self.root / "nested"
+        path.write_text(json.dumps(event("task_started", turn_id="turn")) + "\n" + json.dumps(record) + "\n")
+        with self.assertRaisesRegex(ValueError, "exceeds size limit"):
+            read_turn(path, "turn")
+
+    def test_oversized_answer_still_clears_the_pending_question(self):
+        answer = self.oversized_line("response_item", "function_call_output", 2_100_000, call_id="question")
+        self.codex_fixture([event("task_started", turn_id="turn"),
+                            function("function_call", name="request_user_input", call_id="question")])
+        self.assertEqual(self.observer.poll()[0].state, "waiting")
+        with self.rollout.open("a") as stream:
+            stream.write(answer + "\n")
+        self.assertEqual(self.observer.poll()[0].state, "working")
+
+    def test_log_cause_keeps_only_this_module_messages(self):
+        self.observer._error("codex", ValueError("could not convert string to float: 'private text'"))
+        self.observer._error("claude", ValueError("Invalid JSON file: /Users/someone/.claude/sessions/a.json"))
+        self.assertEqual(self.observer.error_summary(), "codex (ValueError), claude (ValueError)")
+        self.observer.causes, self.observer.errors = {}, []
+        self.observer._error("codex", observe.SourceError("Rollout record exceeds size limit"))
+        self.assertEqual(self.observer.error_summary(), "codex (Rollout record exceeds size limit)")
+
     def test_unreadable_rollout_is_not_rescanned_until_it_changes(self):
         self.codex_fixture([function("function_call", name="request_user_input", call_id="q")])
         with patch("agentdeck.observe.read_turn", wraps=read_turn) as reader:
