@@ -28,6 +28,21 @@ MAX_COMMANDS_PER_POLL = 128
 # Start / Pause cycles through the views; the scroll wheel steps along them without wrapping.
 VIEWS = ["sessions", "tokens", "month"]
 COMMANDS = {*VIEWS, "toggle", "next", "previous", "ack", "pause", "resume", "refresh"}
+# Seconds between polls. A session at work, or one that just changed, is followed every second.
+# At rest the poll still runs often enough for status.json to look alive to `busy-crew status`
+# (5 s) and the menu (10 s), and every other poll renews the bar's lease.
+ACTIVE_INTERVAL = 1
+IDLE_INTERVAL = 2.5
+SETTLE = 10  # Seconds at the active pace after what the collector observes changed.
+LEASE_RENEWAL = 5  # The bar drops a frame 15 s after it was drawn.
+WATCH_INTERVAL = 1  # At rest, how often commands and Claude's files are checked between polls.
+
+
+def pace(sessions, now, changed_at):
+    """Seconds until the next poll: one while a session works or waits, or shortly after a change."""
+    if now - changed_at < SETTLE or any(s.state in {"working", "waiting"} for s in sessions):
+        return ACTIVE_INTERVAL
+    return IDLE_INTERVAL
 
 
 class PrivateRotatingHandler(RotatingFileHandler):
@@ -73,6 +88,7 @@ class Service:
         self.events = queue.Queue(maxsize=MAX_EVENTS)
         self.events_dropped = 0
         self.stop = threading.Event()
+        self.wake = threading.Event()
         self.usage_running = threading.Lock()
         self.sessions = []
         self.presented_sessions = []
@@ -96,6 +112,7 @@ class Service:
             except queue.Full:
                 self.events_dropped += 1
                 return False
+        self.wake.set()
         return True
 
     def command(self, command):
@@ -224,6 +241,36 @@ class Service:
                 break
             self.command(command)
 
+    def news(self, inbox):
+        """What a CLI or menu command, a Claude hook or a Claude session changes on disk: a few stats."""
+        marks = []
+        for directory in (inbox, self.runtime / "hooks"):
+            try:
+                marks.append(directory.stat().st_mtime_ns)
+            except OSError:
+                marks.append(None)
+        # Claude Code rewrites its session files in place, which leaves their directory unchanged.
+        try:
+            with os.scandir(self.observer.claude_root / "sessions") as entries:
+                marks += sorted((entry.name, entry.stat().st_mtime_ns) for entry in entries
+                                if entry.name.endswith(".json"))
+        except OSError:
+            marks.append(None)
+        return marks
+
+    def rest(self, due, inbox):
+        """Wait until `due` (monotonic), or less when a button, a command or a Claude file arrives."""
+        watched = self.news(inbox)
+        while not self.stop.is_set():
+            remaining = due - time.monotonic()
+            if remaining <= 0:
+                return
+            if self.wake.wait(min(WATCH_INTERVAL, remaining)):
+                self.wake.clear()
+                return
+            if self.news(inbox) != watched:
+                return
+
     def run(self):
         lock_path = self.runtime / "service.lock"
         lock = os.fdopen(os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a")
@@ -237,7 +284,7 @@ class Service:
         try:
             handler = configure_logging(self.runtime)
             for sig in (signal.SIGTERM, signal.SIGINT):
-                signal.signal(sig, lambda *_: self.stop.set())
+                signal.signal(sig, lambda *_: (self.stop.set(), self.wake.set()))
             inbox = self.runtime / "inbox"
             inbox.mkdir(exist_ok=True, mode=0o700)
             threading.Thread(target=self.usage_loop, daemon=True).start()
@@ -246,9 +293,11 @@ class Service:
                 threading.Thread(target=self.updates.loop, args=(self.stop,), daemon=True).start()
             LOG.info("Service started")
             last_frame, last_draw, last_error = None, 0, None
+            observed, changed_at = None, 0
             started_at, code_changed, checked_at = time.time(), False, None
             fingerprint = self._fingerprint()
             while not self.stop.is_set():
+                now = time.monotonic()
                 self.read_commands(inbox)
                 self.sessions = self.observer.poll()
                 usage = self.usage.snapshot()
@@ -256,7 +305,6 @@ class Service:
                 frame = render(self.sessions, self.view, month if self.view == "month" else tokens,
                                int(time.time()) % 2, self.observer.errors)
                 xpm = frame.xpm()
-                now = time.monotonic()
                 if checked_at is None:
                     checked_at = now
                 elif not code_changed and now - checked_at >= 30:
@@ -274,7 +322,7 @@ class Service:
                             last_frame = None
                     else:
                         changed = xpm != last_frame
-                        if changed or now - last_draw >= 5:
+                        if changed or now - last_draw >= LEASE_RENEWAL:
                             drawn_at = time.time()
                             self.device.draw(frame)
                             self.presented_until = drawn_at + 15
@@ -308,7 +356,13 @@ class Service:
                     "acknowledgeable": sum(s.state == "ready" for s in self.presented_sessions)}
                 status["health"] = health(status, time.time(), started_at)
                 write_json(self.runtime / "status.json", status, durable=False)
-                self.stop.wait(1)
+                current = (self.sessions, self.view, self.paused, self.observer.errors, device_error)
+                if current != observed:
+                    observed, changed_at = current, now
+                due = now + pace(self.sessions, now, changed_at)
+                if last_frame is not None:  # Displayed: renew the lease on time even at rest.
+                    due = min(due, last_draw + LEASE_RENEWAL)
+                self.rest(due, inbox)
         finally:
             self.stop.set()
             self.presented_sessions = []

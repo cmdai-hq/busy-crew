@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The collector costs less CPU. It reads Claude's hook snapshots again only
+  when one changes: it reread every snapshot left since installation, about 160
+  after a week, every second. It also slows to a read every 2.5 seconds when
+  no session works or waits and nothing changed for 10 seconds. A button press
+  wakes it at once; a `busy-crew` or menu command, or a write from Claude,
+  within a second. The bar's lease is still renewed every 5 seconds.
 - A Codex turn that writes more than 32 MB to its journal (a long run of tool
   calls) no longer turns the Codex family into `?` with "Selected turn boundary
   unavailable". The collector finds the turn's start once, reading back up to

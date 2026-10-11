@@ -23,7 +23,8 @@ from agentdeck.device import APPLICATION, MAX_RESPONSE_BYTES, Device
 from agentdeck.updates import UpdateCheck
 from agentdeck.model import Session
 from agentdeck.render import Frame, compact, render, visible_sessions
-from agentdeck.service import MAX_COMMANDS_PER_POLL, MAX_EVENTS, MAX_INBOX_FILES, Service, configure_logging
+from agentdeck.service import (ACTIVE_INTERVAL, IDLE_INTERVAL, LEASE_RENEWAL, MAX_COMMANDS_PER_POLL, MAX_EVENTS,
+                               MAX_INBOX_FILES, SETTLE, WATCH_INTERVAL, Service, configure_logging, pace)
 from agentdeck.storage import load_json, write_json
 from agentdeck.usage import Usage, UsageSnapshot, parse_periods, parse_usage, usage_output
 
@@ -38,6 +39,7 @@ def service_fixture(runtime):
     service = Service.__new__(Service)
     service.runtime = runtime
     service.stop = threading.Event()
+    service.wake = threading.Event()
     service.usage_running = threading.Lock()
     service.events = queue.Queue(maxsize=MAX_EVENTS)
     service.events_dropped = 0
@@ -49,7 +51,8 @@ def service_fixture(runtime):
     service.sessions = []
     service.presented_sessions = []
     service.presented_until = float("inf")
-    service.observer = SimpleNamespace(poll=lambda: [], errors=[], acknowledge=MagicMock())
+    service.observer = SimpleNamespace(poll=lambda: [], errors=[], acknowledge=MagicMock(),
+                                       claude_root=runtime / "claude")
     service.usage = Usage(command="fixture-ccusage")
     service.device = SimpleNamespace(draw=MagicMock(), clear=MagicMock())
     service.updates = UpdateCheck(runtime, "1.0.1", enabled=False)
@@ -376,10 +379,6 @@ class ServiceReliabilityTests(unittest.TestCase):
         fsync.assert_not_called()
 
     def test_lease_renewal_redraws_without_rewriting_front_png(self):
-        class Immediate(threading.Event):
-            def wait(self, timeout=None):
-                return super().wait(0)
-        self.service.stop = Immediate()
         self.service.device.draw.side_effect = lambda frame: (
             self.service.stop.set() if self.service.device.draw.call_count == 2 else None)
         clock = iter([0, 10])
@@ -415,9 +414,6 @@ class ServiceReliabilityTests(unittest.TestCase):
         self.assertEqual(writes[0]["health"], {"level": "ok", "reasons": []})
 
     def test_code_change_is_detected_after_recheck_interval(self):
-        class Immediate(threading.Event):
-            def wait(self, timeout=None):
-                return super().wait(0)
         package = self.runtime / "package"
         package.mkdir()
         source = package / "service.py"
@@ -429,7 +425,6 @@ class ServiceReliabilityTests(unittest.TestCase):
                 self.service.stop.set()
         self.service.package_root = package
         self.service.inputs_connected = True
-        self.service.stop = Immediate()
         self.service.device.draw.side_effect = draw
         clock, writes = iter([0, 31]), []
         with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
@@ -441,10 +436,6 @@ class ServiceReliabilityTests(unittest.TestCase):
         self.assertEqual(writes[1]["health"]["level"], "update")
 
     def test_fingerprint_failures_never_stop_the_collector(self):
-        class Immediate(threading.Event):
-            def wait(self, timeout=None):
-                return super().wait(0)
-        self.service.stop = Immediate()
         self.service.device.draw.side_effect = lambda frame: (
             self.service.stop.set() if self.service.device.draw.call_count == 2 else None)
         # A reinstall can remove a directory while rglob walks it.
@@ -460,7 +451,8 @@ class ServiceReliabilityTests(unittest.TestCase):
 
     def test_status_counts_only_results_the_bar_can_acknowledge(self):
         # OK acknowledges what the bar shows: nothing from the tokens view.
-        self.service.observer = SimpleNamespace(poll=lambda: [session()], errors=[], acknowledge=MagicMock())
+        self.service.observer = SimpleNamespace(poll=lambda: [session()], errors=[], acknowledge=MagicMock(),
+                                                claude_root=self.runtime / "claude")
         counts = {}
         for view in ["sessions", "tokens"]:
             self.service.view, self.service.stop, writes = view, threading.Event(), []
@@ -528,6 +520,125 @@ class ServiceReliabilityTests(unittest.TestCase):
         files = list(self.runtime.glob("service.log*"))
         self.assertLessEqual(len(files), 4)
         self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in files))
+
+
+class SimulatedClock:
+    """Monotonic time that moves only while the collector waits; arrivals happen on the way."""
+
+    def __init__(self, arrivals=()):
+        self.now, self.arrivals = 0.0, sorted(arrivals, key=lambda arrival: arrival[0])
+
+    def monotonic(self):
+        return self.now
+
+
+class SimulatedWake(threading.Event):
+    def __init__(self, clock):
+        super().__init__()
+        self.clock = clock
+
+    def wait(self, timeout=None):
+        target = self.clock.now + timeout
+        while not self.is_set() and self.clock.arrivals and self.clock.arrivals[0][0] <= target:
+            moment, action = self.clock.arrivals.pop(0)
+            self.clock.now = max(self.clock.now, moment)
+            action()
+        if not self.is_set():
+            self.clock.now = target
+        return self.is_set()
+
+
+def gaps(times):
+    return [round(b - a, 6) for a, b in zip(times, times[1:])]
+
+
+class PaceTests(unittest.TestCase):
+    """The loop's rhythm, on a simulated clock: no device and no real waiting."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.runtime = Path(self.temp.name)
+        self.service = service_fixture(self.runtime)
+        (self.runtime / "claude" / "sessions").mkdir(parents=True)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def simulate(self, states, until, arrivals=()):
+        """Run the collector until `until`; `states(now)` lists the observed session states."""
+        clock = SimulatedClock(arrivals)
+        self.polls, self.draws, self.writes = [], [], []
+        self.service.wake = SimulatedWake(clock)
+
+        def poll():
+            self.polls.append(clock.now)
+            if clock.now >= until:
+                self.service.stop.set()
+            return [session(state=state, sid=str(i)) for i, state in enumerate(states(clock.now))]
+
+        def write(path, data, **_):
+            if path.name == "status.json":
+                self.writes.append(clock.now)
+
+        self.service.observer.poll = poll
+        self.service.device.draw.side_effect = lambda frame: self.draws.append(clock.now)
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.code_fingerprint", return_value=()
+        ), patch("agentdeck.service.time.monotonic", clock.monotonic), patch(
+            "agentdeck.service.write_json", side_effect=write
+        ):
+            self.service.run()
+
+    def test_pace_follows_work_waits_and_recent_changes(self):
+        now = 100
+        for state, expected in [("working", ACTIVE_INTERVAL), ("waiting", ACTIVE_INTERVAL),
+                                ("ready", IDLE_INTERVAL), ("idle", IDLE_INTERVAL), ("unknown", IDLE_INTERVAL)]:
+            with self.subTest(state=state):
+                self.assertEqual(pace([session(state=state)], now, now - SETTLE), expected)
+        self.assertEqual(pace([], now, now - SETTLE), IDLE_INTERVAL)
+        self.assertEqual(pace([session(state="idle")], now, now - SETTLE + 0.5), ACTIVE_INTERVAL)
+
+    def test_working_session_is_followed_every_second(self):
+        self.simulate(lambda now: ["working", "idle"], until=30)
+        self.assertEqual(set(gaps(self.polls)), {ACTIVE_INTERVAL})
+
+    def test_rest_slows_down_but_keeps_lease_and_status_fresh(self):
+        self.simulate(lambda now: ["idle", "ready"], until=60)
+        settled = [t for t in self.polls if t >= SETTLE]
+        self.assertEqual(set(gaps([t for t in self.polls if t <= SETTLE])), {ACTIVE_INTERVAL})
+        self.assertEqual(set(gaps(settled)), {IDLE_INTERVAL})
+        self.assertLessEqual(max(gaps(self.draws)), LEASE_RENEWAL)
+        # `busy-crew status` takes a status older than 5 s for a dead collector, the menu 10 s.
+        self.assertLessEqual(max(gaps(self.writes)), IDLE_INTERVAL)
+
+    def test_session_that_starts_working_restores_the_fast_pace(self):
+        native = self.runtime / "claude" / "sessions" / "1.json"
+        self.simulate(lambda now: ["working"] if now >= 31.3 else ["idle"], until=45,
+                      arrivals=[(31.3, lambda: native.write_text("{}"))])
+        first = next(t for t in self.polls if t >= 31.3)
+        self.assertLessEqual(first - 31.3, WATCH_INTERVAL)
+        self.assertEqual(set(gaps([t for t in self.polls if t >= first])), {ACTIVE_INTERVAL})
+
+    def test_button_wakes_the_collector_at_once_without_breaking_the_lease(self):
+        self.simulate(lambda now: ["idle"], until=60, arrivals=[(33.7, lambda: self.service.enqueue("next"))])
+        self.assertIn(33.7, self.polls)
+        self.assertEqual(self.service.view, "tokens")
+        self.assertLessEqual(max(gaps(self.draws)), LEASE_RENEWAL)
+
+    def test_cli_command_and_claude_hook_wake_the_collector_within_a_second(self):
+        def command():
+            write_json(self.runtime / "inbox" / "command.json", {"command": "month"})
+
+        def hook():
+            write_json(self.runtime / "hooks" / "a.json", {"id": "a", "state": "waiting", "at": 0})
+
+        (self.runtime / "hooks").mkdir()
+        self.simulate(lambda now: ["idle"], until=80, arrivals=[(31.2, command), (55.4, hook)])
+        for moment in [31.2, 55.4]:
+            with self.subTest(moment=moment):
+                self.assertLessEqual(next(t for t in self.polls if t >= moment) - moment, WATCH_INTERVAL)
+        self.assertEqual(self.service.view, "month")
+        self.assertLessEqual(max(gaps(self.draws)), LEASE_RENEWAL)
 
 
 class PresentationContractTests(unittest.TestCase):
