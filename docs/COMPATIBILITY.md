@@ -12,7 +12,7 @@ not a supported LaunchAgent installation target.
 | busylib | 2.6.0, pinned | Installed SDK inspected; input/reconnect behavior tested with mocks |
 | ccusage | 20.0.26 `daily --by-agent --json --offline --no-cost` | Official report shape checked and synthetic parser/process tests; optional local executable |
 
-The documentation audit on 2026-10-11 passed 245 tests on macOS/Python 3.11.13,
+The documentation audit on 2026-10-11 passed 254 tests on macOS/Python 3.11.13,
 including Swift compilation and menu tests. A fresh uv environment and the
 installed PyPI 1.1.2 package passed their smoke checks. No hardware was retested.
 

@@ -1,6 +1,8 @@
 # How Busy Crew works
 
-The collector runs on your Mac. Once a second it reads local Claude and Codex data, draws a 72 × 16 pixel frame and sends it to the bar when it changes. It reads files read-only and sends only pixels to the bar.
+The collector runs on your Mac. It reads local Claude and Codex data, draws a 72 × 16 pixel frame and sends it to the bar when it changes. It reads files read-only and sends only pixels to the bar.
+
+It reads once a second while a session works or waits for you, and for 10 seconds after anything it shows changes. When everything is at rest it reads every 2.5 seconds. A button press reads at once; a command from `busy-crew` or the menu, or a write from Claude, within a second.
 
 - [Results and acknowledgment](#results-and-acknowledgment)
 - [Tokens](#tokens)
