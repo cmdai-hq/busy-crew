@@ -605,6 +605,13 @@ class LifecycleTests(unittest.TestCase):
             stream.write(answer + "\n")
         self.assertEqual(self.observer.poll()[0].state, "working")
 
+    def test_claude_source_failure_logs_its_cause(self):
+        (self.runtime / "hooks").mkdir(parents=True)
+        (self.runtime / "hooks" / "a.json").write_text('{"id": 3}')
+        self.native()
+        self.observer.poll()
+        self.assertEqual(self.observer.error_summary(), "claude (Invalid session/turn identifier)")
+
     def test_log_cause_keeps_only_this_module_messages(self):
         self.observer._error("codex", ValueError("could not convert string to float: 'private text'"))
         self.observer._error("claude", ValueError("Invalid JSON file: /Users/someone/.claude/sessions/a.json"))
