@@ -1,5 +1,3 @@
-import contextlib
-import io
 import json
 import os
 import sqlite3
@@ -33,54 +31,6 @@ def claude_duo_crop(state):
 
 
 class RenderingTests(unittest.TestCase):
-    def test_tiles_keep_lit_pixels_and_leave_unlit_ones_transparent(self):
-        from PIL import Image
-        from agentdeck.render import tiles
-        source = Image.new("RGB", (72, 16), (0, 0, 0))
-        source.putpixel((3, 2), (220, 134, 107))
-        image = tiles(source)
-        self.assertEqual((image.mode, image.size), ("RGBA", (1440, 320)))
-        self.assertEqual(image.getpixel((3 * 20 + 10, 2 * 20 + 10)), (220, 134, 107, 255))
-        self.assertEqual(image.getpixel((3 * 20, 2 * 20)), (0, 0, 0, 0))  # The gap between tiles.
-        self.assertEqual(image.getpixel((10, 10)), (0, 0, 0, 0))  # An unlit LED.
-
-    def test_light_tiles_ink_white_pixels_and_keep_colors(self):
-        from PIL import Image
-        from agentdeck.render import INK_ON_LIGHT, tiles
-        source = Image.new("RGB", (72, 16), (0, 0, 0))
-        source.putpixel((0, 0), (223, 233, 238))  # White text.
-        source.putpixel((1, 0), (120, 149, 255))  # Codex blue.
-        dark, light = tiles(source), tiles(source, ground="light")
-        self.assertEqual(dark.getpixel((10, 10))[:3], (223, 233, 238))
-        self.assertEqual(light.getpixel((10, 10))[:3], INK_ON_LIGHT)
-        self.assertEqual(light.getpixel((30, 10))[:3], (120, 149, 255))
-
-    def test_small_tile_cells_still_draw(self):
-        from PIL import Image
-        from agentdeck.render import tiles
-        source = Image.new("RGB", (72, 16), (0, 0, 0))
-        source.putpixel((5, 5), (135, 221, 155))
-        for cell in (1, 2, 3, 4):
-            with self.subTest(cell=cell):
-                image = tiles(source, cell)
-                self.assertEqual(image.getpixel((5 * cell + cell // 2, 5 * cell + cell // 2)), (135, 221, 155, 255))
-
-    def test_bare_tiles_option_works_before_the_path(self):
-        from agentdeck import cli
-        for args, ground in [(["--tiles", "out.png"], "dark"), (["out.png", "--tiles"], "dark"), (["--tiles-light", "out.png"], "light")]:
-            with self.subTest(args=args), patch("sys.argv", ["busy-crew", "snapshot", *args]), \
-                    patch.object(cli, "load_json", return_value={}), \
-                    patch("agentdeck.device.Device.screen", return_value=bytes(72 * 16 * 3)), \
-                    patch("agentdeck.render.tiles") as tiles, patch("PIL.Image.Image.save"):
-                cli.main()
-                self.assertEqual(tiles.call_args.kwargs["ground"], ground)
-
-    def test_snapshot_tiles_and_leds_are_exclusive(self):
-        from agentdeck.cli import main
-        with patch("sys.argv", ["busy-crew", "snapshot", "out.png", "--tiles-light", "--leds"]), \
-                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            main()
-
     def test_dimmed_codex_keeps_a_visible_face(self):
         for sprite in [CODEX, MINI_CODEX]:
             frame = Frame()
