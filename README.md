@@ -51,11 +51,9 @@ busy-crew status
 
 Use your bar's address. Your agents appear on the bar within a few seconds.
 
-> The Homebrew and PyPI packages arrive with version 1.1.0. Until it is released, install [from a checkout](#from-a-checkout).
-
 **Updating:** `brew upgrade busy-crew` or `uv tool upgrade busy-crew`, then `busy-crew install`, which keeps your settings, refreshes the LaunchAgent and hooks and restarts the collector. If you use the [menu bar icon](#menu-bar-icon), run `busy-crew menubar install` too. **Removing:** run `busy-crew uninstall` first, then `brew uninstall busy-crew` or `uv tool uninstall busy-crew`.
 
-<a id="from-a-checkout"></a>**From a checkout**, to contribute or try unreleased changes, prefix every command in this README with `uv run`, and update with `git pull --ff-only && uv sync --locked` before the same `install`:
+**From a checkout**, to contribute or try unreleased changes, prefix every command in this README with `uv run`, and update with `git pull --ff-only && uv sync --locked` before the same `install`:
 
 ```sh
 git clone https://github.com/cmdai-hq/busy-crew.git
