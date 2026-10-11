@@ -40,7 +40,7 @@ At its first startup, the monitor ignores old completed responses. A transition 
 
 Two token views show totals **by agent family**: today (labelled `TODAY`), and the calendar month to date, from the 1st through today (labelled `MONTH`). The month count starts again on the 1st.
 
-- Both come from a single [ccusage](https://ccusage.com/) `daily --by-agent` report, refreshed every two minutes. `busy-crew refresh`, or **Refresh tokens now** in the menu bar icon, recounts them within a couple of seconds. Only one ccusage run happens at a time: a request made while one is running joins it.
+- Both come from a single [ccusage](https://ccusage.com/) `daily --by-agent` report, refreshed every two minutes. `uv run busy-crew refresh`, or **Refresh tokens now** in the menu bar icon, recounts them within a couple of seconds. Only one ccusage run happens at a time: a request made while one is running joins it.
 - Totals use ccusage's `totalTokens`, which includes cache tokens. They are shown in K (thousand), M (million) or G (billion).
 - There is no instantaneous rate, context size or remaining subscription quota, and no cost is extrapolated for a model without known pricing.
 - A family with usage earlier in the month shows 0 for a day without any. An error, stale data, or a change of day produces a `?`.

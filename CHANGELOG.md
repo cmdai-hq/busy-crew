@@ -7,7 +7,7 @@
   is still honored next to `BUSY_CREW_STATE`. New installations use
   `~/Library/Application Support/BusyCrew`; existing ones keep their folder,
   LaunchAgent and hooks. After pulling, run `uv sync --locked` to get the new
-  command, and `busy-crew menubar install` to rename the menu bar app.
+  command, and `uv run busy-crew menubar install` to rename the menu bar app.
 - Add a month-to-date token view: Start / Pause cycles sessions, today and
   this month, and the scroll wheel steps between them. Each token view names
   its period at the bottom.

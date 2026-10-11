@@ -4,7 +4,7 @@ Run `uv run busy-crew --version` and `uv run busy-crew status` first. Status omi
 
 ## Common problems
 
-**The bar went dark.** Check `busy-crew status` first; the [menu bar icon](menu-bar.md) shows the same at a glance. Three causes look alike on the bar:
+**The bar went dark.** Check `uv run busy-crew status` first; the [menu bar icon](menu-bar.md) shows the same at a glance. Three causes look alike on the bar:
 - the collector stopped, so its 15-second display lease expired (no fresh `status.json`, menu bar `xmark.circle`);
 - the collector is running but the selector is on Off or Settings, which clears the display (`"paused": true`, menu bar `pause.circle`);
 - the collector is running but a higher-priority application owns the display; Busy Crew does not raise its priority to take it back.
