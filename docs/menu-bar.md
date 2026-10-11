@@ -8,11 +8,11 @@ The bar shows sessions, not the collector feeding it. When the service stops, th
 
 ```sh
 xcode-select --install                 # once, for the Swift compiler
-uv run busy-crew menubar install
-uv run busy-crew menubar uninstall
+busy-crew menubar install
+busy-crew menubar uninstall
 ```
 
-`menubar install` compiles a small AppKit app (`agentdeck/menubar/BusyCrewMenu.swift`) into the private runtime folder. It then starts the app with its own LaunchAgent (`local.busybar.agent-deck.menubar`) at login. A failed compile or start leaves any previous version in place. `uv run busy-crew uninstall` also removes the icon.
+`menubar install` compiles a small AppKit app (`agentdeck/menubar/BusyCrewMenu.swift`) into the private runtime folder. It then starts the app with its own LaunchAgent (`local.busybar.agent-deck.menubar`) at login. A failed compile or start leaves any previous version in place. `busy-crew uninstall` also removes the icon.
 
 | Icon | Meaning |
 | --- | --- |
@@ -35,7 +35,4 @@ The menu shows:
 
 The icon is cheap to run: it reads the 1.5 KB `status.json` every 5 seconds and when you open the menu. It never reads Claude or Codex data and never contacts the bar.
 
-After updating the checkout:
-- **Reload collector** picks up Python changes.
-- If dependencies changed, run `uv sync --locked` first.
-- If the Swift app changed, re-run `uv run busy-crew menubar install`.
+After updating Busy Crew, run `busy-crew install` (it restarts the collector) and `busy-crew menubar install`. In a checkout, **Reload collector** is enough for Python-only changes; run `uv sync --locked` first if dependencies changed.

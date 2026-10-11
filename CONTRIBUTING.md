@@ -28,6 +28,6 @@ them at the native 72 × 16 resolution as well as enlarged. The README images in
 `docs/` are real captures (for example `uv run busy-crew snapshot docs/tokens-today.png --leds`); do not overwrite them
 with fictional previews.
 
-CI tests Linux and macOS on Python 3.11 and 3.14. Device integration and real
+CI tests Linux and macOS on Python 3.11, 3.14 and 3.15. Device integration and real
 LaunchAgent lifecycle checks require an explicitly chosen test device/account;
 unit tests and wheel smoke tests do not establish those results.

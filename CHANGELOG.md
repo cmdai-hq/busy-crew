@@ -7,6 +7,10 @@
   formula's `opt` link instead. `--python` or `BUSY_CREW_PYTHON` choose
   another interpreter, and `install` checks that it can run Busy Crew before
   changing anything.
+- Publish to PyPI: `uv tool install busy-crew` installs it without a
+  checkout. A published GitHub release builds, tests and uploads the wheel
+  and sdist through PyPI trusted publishing. The README describes the
+  Homebrew, uv and checkout installs, and its links work on the PyPI page.
 
 ## 1.0.1 — 2026-10-11
 
