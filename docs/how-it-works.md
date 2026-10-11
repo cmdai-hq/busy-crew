@@ -63,7 +63,8 @@ Read-only access to `~/.codex/state_5.sqlite`, `thread_history_1.sqlite`, and ro
 - If the rollout already contains a newer root turn than SQLite, the previous completion is cleared and the session remains unknown until the sources agree.
 - An `inProgress` turn with no local writes for 15 minutes is discarded. This avoids ghost sessions, but can also hide a very long, silent turn or an extended wait.
 - Synchronous question detection uses rollout events when available. **These files do not expose every approval request from the Codex app: yellow indicators for Codex provide only partial coverage.** An asynchronous question does not mark a still-active session as waiting.
-- Codex's internal databases and formats can change: a read incompatibility displays a `?` without modifying the app's data.
+- A single journal line over 2 MB, such as a large tool output, is left out of the turn. A turn event that large makes the conversation unreadable, and the family shows `?`.
+- Codex's internal databases and formats can change: a read incompatibility displays a `?` without modifying the app's data. The service log names the cause, never a path or conversation content.
 - Tasks orchestrated in the cloud and sessions on other machines are not tracked.
 
 A source error never reuses the last known count. See [compatibility notes](COMPATIBILITY.md) for the tested versions and contracts.

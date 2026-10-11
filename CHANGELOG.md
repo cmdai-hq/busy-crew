@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1 — 2026-10-11
+
+- A Codex conversation with a journal line over 2 MB (a large tool output)
+  no longer shows `?` for the whole Codex family for up to a day: the line is
+  left out of the turn. Turn events and function calls that large still fail
+  the read.
+- An unreadable Codex journal is no longer rescanned every second until it
+  changes, and the service log names why a source failed.
+
 ## 1.0.0 — 2026-10-11
 
 First public release, under the MIT License.

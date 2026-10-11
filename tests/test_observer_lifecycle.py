@@ -525,6 +525,90 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual([s.provider for s in observer.poll()], ["claude"])
         self.assertFalse(observer.errors)
 
+    def oversized_line(self, kind, payload_type, length, **payload):
+        """One JSON record of exactly `length` bytes, padded inside its payload."""
+        record = {"timestamp": "2026-10-07T01:47:19.940Z", "type": kind,
+                  "payload": {"type": payload_type, **payload, "output": ""}}
+        base = len(json.dumps(record))
+        record["payload"]["output"] = "x" * (length - base)
+        line = json.dumps(record)
+        self.assertEqual(len(line), length)
+        return line
+
+    def test_oversized_tool_output_is_left_out_of_the_turn(self):
+        big = self.oversized_line("response_item", "custom_tool_call_output", 3_430_000, call_id="c")
+        self.codex_fixture([event("task_started", turn_id="turn")], "completed", self.now)
+        with self.rollout.open("a") as stream:
+            stream.write(big + "\n" + json.dumps(event("task_complete", turn_id="turn")) + "\n")
+        self.assertEqual(self.observer.poll()[0].state, "ready")
+        self.assertFalse(self.observer.errors)
+
+    def test_oversized_record_split_across_read_chunks_is_still_recognized(self):
+        complete = json.dumps(event("task_complete", turn_id="turn"))
+        # The newline before the big record lands 3 bytes before a 64 KiB read boundary.
+        big = self.oversized_line("response_item", "function_call_output", 65536 * 40 - len(complete), call_id="c")
+        self.codex_fixture([event("task_started", turn_id="turn")], "completed", self.now)
+        with self.rollout.open("a") as stream:
+            stream.write(big + "\n" + complete + "\n")
+        size = self.rollout.stat().st_size
+        newline_before_big = size - len(complete) - 1 - len(big) - 1 - 1
+        self.assertEqual((size - newline_before_big) % 65536, 3)
+        self.assertEqual(self.observer.poll()[0].state, "ready")
+
+    def test_oversized_turn_event_or_function_call_still_fails_the_read(self):
+        for kind, payload_type in [("event_msg", "task_complete"), ("response_item", "function_call")]:
+            with self.subTest(payload_type=payload_type):
+                big = self.oversized_line(kind, payload_type, 2_100_000, turn_id="turn", call_id="c")
+                path = self.root / ("rollout-" + payload_type)
+                path.write_text(json.dumps(event("task_started", turn_id="turn")) + "\n" + big + "\n")
+                with self.assertRaisesRegex(ValueError, "exceeds size limit"):
+                    read_turn(path, "turn")
+
+    def test_nested_header_cannot_make_an_oversized_turn_event_skippable(self):
+        record = {"metadata": {"type": "response_item", "payload": {"type": "message"}},
+                  "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn", "output": "x" * 2_100_000}}
+        path = self.root / "nested"
+        path.write_text(json.dumps(event("task_started", turn_id="turn")) + "\n" + json.dumps(record) + "\n")
+        with self.assertRaisesRegex(ValueError, "exceeds size limit"):
+            read_turn(path, "turn")
+
+    def test_oversized_answer_still_clears_the_pending_question(self):
+        answer = self.oversized_line("response_item", "function_call_output", 2_100_000, call_id="question")
+        self.codex_fixture([event("task_started", turn_id="turn"),
+                            function("function_call", name="request_user_input", call_id="question")])
+        self.assertEqual(self.observer.poll()[0].state, "waiting")
+        with self.rollout.open("a") as stream:
+            stream.write(answer + "\n")
+        self.assertEqual(self.observer.poll()[0].state, "working")
+
+    def test_claude_source_failure_logs_its_cause(self):
+        (self.runtime / "hooks").mkdir(parents=True)
+        (self.runtime / "hooks" / "a.json").write_text('{"id": 3}')
+        self.native()
+        self.observer.poll()
+        self.assertEqual(self.observer.error_summary(), "claude (Invalid session/turn identifier)")
+
+    def test_log_cause_keeps_only_this_module_messages(self):
+        self.observer._error("codex", ValueError("could not convert string to float: 'private text'"))
+        self.observer._error("claude", ValueError("Invalid JSON file: /Users/someone/.claude/sessions/a.json"))
+        self.assertEqual(self.observer.error_summary(), "codex (ValueError), claude (ValueError)")
+        self.observer.causes, self.observer.errors = {}, []
+        self.observer._error("codex", observe.SourceError("Rollout record exceeds size limit"))
+        self.assertEqual(self.observer.error_summary(), "codex (Rollout record exceeds size limit)")
+
+    def test_unreadable_rollout_is_not_rescanned_until_it_changes(self):
+        self.codex_fixture([function("function_call", name="request_user_input", call_id="q")])
+        with patch("agentdeck.observe.read_turn", wraps=read_turn) as reader:
+            for _ in range(3):
+                self.assertEqual(self.observer.poll(), [])
+                self.assertEqual(self.observer.errors, ["codex"])
+            self.assertEqual(reader.call_count, 1)
+            self.assertEqual(self.observer.error_summary(), "codex (Selected turn boundary unavailable)")
+            with self.rollout.open("a") as stream:
+                stream.write(json.dumps(event("task_started", turn_id="turn")) + "\n")
+            self.assertEqual(self.observer.poll()[0].state, "working")
+            self.assertEqual(reader.call_count, 2)
+
     def test_rollout_scan_limit_is_explicit(self):
         path = self.root / "rollout"
         path.write_text(json.dumps(event("task_started", turn_id="turn")) + "\n" + json.dumps(function("function_call_output", call_id="1", output="x" * 1000)) + "\n")

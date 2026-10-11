@@ -280,7 +280,7 @@ class Service:
                     # Failed frames retry next poll and the device lease expires after 15s.
                     last_frame = None
                     self.presented_sessions = []
-                error = device_error or (",".join(self.observer.errors) if self.observer.errors else None)
+                error = device_error or (self.observer.error_summary() if self.observer.errors else None)
                 if error != last_error:
                     LOG.warning("Source/device status: %s", error or "recovered")
                     last_error = error

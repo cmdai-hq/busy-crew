@@ -2,6 +2,7 @@ import ctypes
 import json
 import math
 import os
+import re
 import sqlite3
 import struct
 import subprocess
@@ -19,6 +20,17 @@ STATES = {"working", "waiting", "ready", "idle", "unknown"}
 MAX_ROLLOUT_SCAN = 32_000_000
 MAX_RECORD = 2_000_000
 CODEX_DATABASES = ("state_5.sqlite", "thread_history_1.sqlite")
+# Events that change a turn's state (see rollout_details). Any other oversized record is left out.
+TURN_EVENTS = {"task_started", "turn_started", "task_complete", "turn_complete", "turn_aborted", "approval_request",
+               "request_user_input", "approval_response", "user_message", "thread_status_changed"}
+# The top-level header of a Codex record, anchored at its first byte so a nested object cannot pose as it.
+RECORD_HEAD = re.compile(rb'\{\s*(?:"timestamp"\s*:\s*"[^"\\]*"\s*,\s*)?(?:"ordinal"\s*:\s*\d+\s*,\s*)?'
+                         rb'"type"\s*:\s*"([a-z_]+)"\s*,\s*"payload"\s*:\s*\{\s*"type"\s*:\s*"([a-z_]+)"\s*'
+                         rb'(?:,\s*"id"\s*:\s*"[^"\\]*"\s*)?(?:,\s*"call_id"\s*:\s*"([^"\\]{1,200})")?')
+
+
+class SourceError(ValueError):
+    """A source read failed for a reason this module states itself: safe to log, never a path or content."""
 # A finished or failed Codex conversation silent for this long is dead: it leaves the count.
 CODEX_STALE = 7200
 # xnu bsd/sys/proc_info.h: PROC_PIDTBSDINFO fills a 136-byte proc_bsdinfo.
@@ -27,18 +39,18 @@ PROC_PIDTBSDINFO, BSDINFO_SIZE, BSDINFO_PID, BSDINFO_START = 3, 136, 12, 120
 
 def identifier(value):
     if not isinstance(value, str) or not 0 < len(value) <= 200 or any(ord(c) < 32 for c in value):
-        raise ValueError("Invalid session/turn identifier")
+        raise SourceError("Invalid session/turn identifier")
     return value
 
 
 def timestamp(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
-        raise ValueError("Invalid timestamp")
+        raise SourceError("Invalid timestamp")
     try:
         if not math.isfinite(value):
-            raise ValueError("Invalid timestamp")
+            raise SourceError("Invalid timestamp")
     except OverflowError as exc:
-        raise ValueError("Invalid timestamp") from exc
+        raise SourceError("Invalid timestamp") from exc
     return value
 
 
@@ -87,7 +99,7 @@ def process_birth(pid):
         raise OSError(ctypes.get_errno(), "Process information unavailable")
     # The pid field guards against a changed proc_bsdinfo layout.
     if struct.unpack_from("I", info, BSDINFO_PID)[0] != pid:
-        raise ValueError("Unexpected process information layout")
+        raise SourceError("Unexpected process information layout")
     return struct.unpack_from("Q", info, BSDINFO_START)[0]
 
 
@@ -104,19 +116,38 @@ def pid_matches(pid, started=None):
 
 def record_json(line):
     if len(line) > MAX_RECORD:
-        raise ValueError("Rollout record exceeds size limit")
+        raise SourceError("Rollout record exceeds size limit")
     try:
         record = json.loads(line)
     except RecursionError as exc:
-        raise ValueError("Rollout nesting exceeds parser limit") from exc
+        raise SourceError("Rollout nesting exceeds parser limit") from exc
     if not isinstance(record, dict) or not isinstance(record.get("payload", {}), dict):
-        raise ValueError("Invalid rollout record")
+        raise SourceError("Invalid rollout record")
     return record
+
+
+def oversized_record(head):
+    """Stand-in for a record over MAX_RECORD, or None to leave it out; fails when it could change the turn.
+
+    A large tool output (a command's log, an image) must not make the whole source unreadable. A turn
+    event or a function call still must be parsed, and an output keeps its call_id: it may answer a
+    pending question. Only the record's top-level header decides; anything else fails the read.
+    """
+    match = RECORD_HEAD.match(head[:4096])
+    if match:
+        kind, payload, call_id = match.group(1).decode(), match.group(2).decode(), match.group(3)
+        if kind == "response_item" and payload == "function_call_output" and call_id:
+            return {"type": kind, "payload": {"type": payload, "call_id": call_id.decode()}}
+        if kind == "response_item" and payload not in {"function_call", "function_call_output"}:
+            return None
+        if kind == "event_msg" and payload not in TURN_EVENTS:
+            return None
+    raise SourceError("Rollout record exceeds size limit")
 
 
 def read_turn(path, turn_id):
     """Read backwards to a verified selected-turn boundary, with explicit limits."""
-    records, buffer, terminated = [], b"", False
+    records, buffer, terminated, oversized, head = [], b"", False, False, b""
     with path.open("rb") as handle:
         position = handle.seek(0, 2)
         floor = max(0, position - MAX_ROLLOUT_SCAN)
@@ -124,7 +155,18 @@ def read_turn(path, turn_id):
             length = min(65536, position - floor)
             position -= length
             handle.seek(position)
-            buffer = handle.read(length) + buffer
+            chunk = handle.read(length)
+            if oversized:
+                # Reading backwards, only the start of an oversized record is kept: it holds its kind.
+                start = chunk.rfind(b"\n")
+                if start < 0:
+                    head = (chunk + head)[:4096]
+                    continue
+                stand_in = oversized_record(chunk[start + 1:] + head)
+                if stand_in:
+                    records.append(stand_in)
+                oversized, chunk = False, chunk[:start + 1]
+            buffer = chunk + buffer
             if not terminated:
                 # Codex may still be appending the last record: parse only complete lines.
                 end = buffer.rfind(b"\n")
@@ -137,20 +179,27 @@ def read_turn(path, turn_id):
             for line in reversed(lines):
                 if not line:
                     continue
+                if len(line) > MAX_RECORD:
+                    stand_in = oversized_record(line)
+                    if stand_in:
+                        records.append(stand_in)
+                    continue
                 record = record_json(line)
                 records.append(record)
                 payload = record.get("payload", {})
                 if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
                     return list(reversed(records))
             if len(buffer) > MAX_RECORD:
-                raise ValueError("Rollout record exceeds size limit")
-        if floor == 0 and buffer:
+                oversized, head, buffer = True, buffer[:4096], b""
+        if floor == 0 and (oversized or len(buffer) > MAX_RECORD):
+            oversized_record(head if oversized else buffer)  # The file starts with it: never the boundary.
+        elif floor == 0 and buffer:
             record = record_json(buffer)
             records.append(record)
             payload = record.get("payload", {})
             if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
                 return list(reversed(records))
-    raise ValueError("Selected turn boundary unavailable")
+    raise SourceError("Selected turn boundary unavailable")
 
 
 def rollout_details(records, turn_id):
@@ -158,7 +207,7 @@ def rollout_details(records, turn_id):
     pending, explicit_wait, boundary, superseded = set(), False, False, False
     for record in records:
         if not isinstance(record, dict) or not isinstance(record.get("payload", {}), dict):
-            raise ValueError("Invalid rollout record")
+            raise SourceError("Invalid rollout record")
         payload = record.get("payload", {})
         kind = payload.get("type")
         if record.get("type") == "event_msg":
@@ -183,7 +232,7 @@ def rollout_details(records, turn_id):
                 elif kind == "thread_status_changed":
                     flags = payload.get("active_flags", [])
                     if not isinstance(flags, list) or not all(isinstance(flag, str) for flag in flags):
-                        raise ValueError("Invalid active flags")
+                        raise SourceError("Invalid active flags")
                     explicit_wait = bool(set(flags) & {"waitingOnApproval", "waitingOnUserInput"})
         elif current == turn_id and terminal is None and record.get("type") == "response_item":
             if kind == "function_call" and payload.get("name") in {"request_user_input", "mcp__request_user_input"}:
@@ -208,6 +257,7 @@ class Observer:
         self.clock, self.alive, self.started = clock, alive, clock()
         self.previous, self.instances, self.tail_cache = {}, {}, {}
         self.errors, self.state_errors = [], set()  # Ledgers that could not be read intact.
+        self.causes = {}  # Provider -> why it failed, for the log; never a path or content.
         self.acks = self._load_state("acknowledged.json")
         self.results = self._load_state("completions.json")
         self.results_dirty = False
@@ -222,7 +272,7 @@ class Observer:
             try:
                 self._state_key(key)
                 if not isinstance(result, dict):
-                    raise ValueError("Invalid pending result")
+                    raise SourceError("Invalid pending result")
                 identifier(result.get("version"))
                 timestamp(result.get("completed_at"))
                 if result.get("instance") is not None:
@@ -242,7 +292,7 @@ class Observer:
     def _state_key(key):
         provider, separator, sid = key.partition(":")
         if provider not in {"claude", "codex"} or not separator:
-            raise ValueError("Invalid persisted provider")
+            raise SourceError("Invalid persisted provider")
         identifier(sid)
 
     def _load_state(self, name):
@@ -252,9 +302,15 @@ class Observer:
             self.state_errors.add(name)
             return {}
 
-    def _error(self, provider):
+    def _error(self, provider, exc=None):
         if provider not in self.errors:
             self.errors.append(provider)
+        if exc is not None and provider not in self.causes:
+            # Only this module's own messages are logged; any other error may carry a path or a value.
+            self.causes[provider] = str(exc) if isinstance(exc, SourceError) else type(exc).__name__
+
+    def error_summary(self):
+        return ", ".join(p + (f" ({self.causes[p]})" if p in self.causes else "") for p in self.errors)
 
     def _save_results(self):
         self.results_dirty = True
@@ -325,11 +381,11 @@ class Observer:
     def _files(self, path, provider):
         if not path.exists():
             if self.known_sources[provider] or any(key.startswith(provider + ":") for key in self.results):
-                raise ValueError("Previously available source is absent")
+                raise SourceError("Previously available source is absent")
             return []
         self.known_sources[provider] = True
         if not path.is_dir():
-            raise ValueError("Source directory incompatible")
+            raise SourceError("Source directory incompatible")
         return sorted(p for p in path.iterdir() if p.suffix == ".json")
 
     def _hooks(self):
@@ -347,18 +403,18 @@ class Observer:
                 sid = identifier(data.get("id"))
                 timestamp(data.get("at"))
                 if data.get("state") not in STATES | {"closed"}:
-                    raise ValueError("Invalid hook state")
+                    raise SourceError("Invalid hook state")
                 if data.get("schema") == 2 and not valid_snapshot(data):
-                    raise ValueError("Invalid hook snapshot")
+                    raise SourceError("Invalid hook snapshot")
                 if data.get("schema") == 2 and data.get("turn"):
                     identifier(data["turn"])
                 elif data.get("schema") is None:
                     data = {key: data[key] for key in ("id", "state", "at")}
                 elif data.get("schema") != 2:
-                    raise ValueError("Unsupported hook schema")
+                    raise SourceError("Unsupported hook schema")
                 hooks[sid] = data
-            except (OSError, ValueError, TypeError):
-                self._error("claude")
+            except (OSError, ValueError, TypeError) as exc:
+                self._error("claude", exc)
         return hooks
 
     def claude(self):
@@ -377,9 +433,9 @@ class Observer:
                     continue
                 pid, started = data.get("pid"), data.get("procStart")
                 if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
-                    raise ValueError("Invalid native PID")
+                    raise SourceError("Invalid native PID")
                 if self.alive is pid_matches and (not isinstance(started, str) or not started):
-                    raise ValueError("Native process birth unavailable")
+                    raise SourceError("Native process birth unavailable")
                 if not self.alive(pid, started):
                     self._forget(key)
                     continue
@@ -425,8 +481,8 @@ class Observer:
                     elif state == "idle" and hook.get("turn_started_at", 0) > native_at and hook.get("state") == "working":
                         state = "working"
                 result.append(self.completion("claude", sid, state, version, completed_at, instance))
-            except (OSError, ValueError, TypeError):
-                self._error("claude")
+            except (OSError, ValueError, TypeError) as exc:
+                self._error("claude", exc)
         # An invalid file may conceal an existing session; retain its ledger for recovery.
         if "claude" not in self.errors:
             for key in list(set(self.previous) | set(self.results) | set(self.acks)):
@@ -438,7 +494,7 @@ class Observer:
         state_db, history_db = (self.codex_root / name for name in CODEX_DATABASES)
         if not state_db.exists() or not history_db.exists():
             if self.known_sources["codex"] or any(key.startswith("codex:") for key in self.results):
-                raise ValueError("Codex databases unavailable or incompatible")
+                raise SourceError("Codex databases unavailable or incompatible")
             return []
         self.known_sources["codex"] = True
         result, now, seen = [], self.clock(), set()
@@ -472,7 +528,7 @@ class Observer:
                     turn = history.execute("SELECT * FROM thread_turns WHERE thread_id=? ORDER BY rollout_ordinal DESC LIMIT 1", (sid,)).fetchone()
                     if turn is None:
                         if "codex:" + sid in self.results:
-                            raise ValueError("Previously observed turn unavailable")
+                            raise SourceError("Previously observed turn unavailable")
                         continue
                     version, status = identifier(turn["turn_id"]), turn["status"]
                     completed_at = turn["completed_at"] or 0
@@ -480,14 +536,21 @@ class Observer:
                         completed_at = float(completed_at)
                     completed_at = timestamp(completed_at)
                     if not isinstance(thread["rollout_path"], str):
-                        raise ValueError("Invalid rollout path")
+                        raise SourceError("Invalid rollout path")
                     path = Path(thread["rollout_path"])
                     stat = path.stat()
                     cache_key = (str(path.resolve()), stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size, version)
                     cached = self.tail_cache.get(sid)
                     if not cached or cached[0] != cache_key:
-                        cached = (cache_key, rollout_details(read_turn(path, version), version))
+                        try:
+                            outcome = rollout_details(read_turn(path, version), version)
+                        except ValueError as exc:
+                            # An unreadable rollout stays so until it changes: don't rescan it every poll.
+                            outcome = exc
+                        cached = (cache_key, outcome)
                         self.tail_cache[sid] = cached
+                    if isinstance(cached[1], Exception):
+                        raise cached[1].with_traceback(None)
                     details = cached[1]
                     completed_at = details["completed_at"] or completed_at
                     freshness = max(stat.st_mtime, timestamp(thread["updated_at"]))
@@ -510,8 +573,8 @@ class Observer:
                     session = self.completion("codex", sid, state_name, version, completed_at)
                     if session.state != "idle":
                         result.append(session)
-                except (OSError, ValueError, TypeError, sqlite3.Error):
-                    self._error("codex")
+                except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
+                    self._error("codex", exc)
             for sid in set(self.tail_cache) - seen:
                 self.tail_cache.pop(sid, None)
             for key in list(self.previous):
@@ -520,7 +583,7 @@ class Observer:
         return result
 
     def poll(self):
-        sessions, self.errors = [], ["state"] if self.state_errors else []
+        sessions, self.errors, self.causes = [], ["state"] if self.state_errors else [], {}
         if self.results_dirty:
             try:
                 self._save_results()
@@ -529,6 +592,6 @@ class Observer:
         for provider, collect in [("claude", self.claude), ("codex", self.codex)]:
             try:
                 sessions.extend(collect())
-            except (OSError, ValueError, TypeError, sqlite3.Error):
-                self._error(provider)
+            except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
+                self._error(provider, exc)
         return sessions
