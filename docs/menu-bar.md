@@ -1,5 +1,9 @@
 # Menu bar icon
 
+<p align="center">
+  <img src="menu-bar.png" width="540" alt="Busy Crew's menu, open from the macOS menu bar">
+</p>
+
 The bar shows sessions, not the collector feeding it. When the service stops, the device lease expires after 15 seconds and the bar goes dark without saying why. This optional macOS menu bar icon shows the collector's own health, with a menu of reasons and actions.
 
 ```sh
