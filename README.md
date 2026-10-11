@@ -3,7 +3,7 @@
 **See what your Claude Code and Codex agents are doing at a glance, on the LED strip of your [BUSY Bar](https://busy.app).** Each session is a little character: working, waiting for you, or done.
 
 <p align="center">
-  <img src="docs/duo.png" width="576" alt="Busy Crew on a BUSY Bar: 7 Claude sessions and 3 Codex conversations, with their states">
+  <img src="docs/busy-bar.jpg" width="576" alt="A BUSY Bar running Busy Crew: 4 Claude sessions and 3 Codex conversations, with their states">
 </p>
 
 Your Mac reads Claude Code and Codex activity locally and sends a 72 × 16 pixel frame to the bar. No conversation content leaves your Mac and no cloud service is involved. Busy Crew is an independent project, not affiliated with BUSY, Anthropic or OpenAI.
