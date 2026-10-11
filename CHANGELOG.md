@@ -8,6 +8,7 @@
   `~/Library/Application Support/BusyCrew`; existing ones keep their folder,
   LaunchAgent and hooks. After pulling, run `uv sync --locked` to get the new
   command, and `uv run busy-crew menubar install` to rename the menu bar app.
+- License the project under MIT instead of PolyForm Noncommercial.
 - Add a month-to-date token view: Start / Pause cycles sessions, today and
   this month, and the scroll wheel steps between them. Each token view names
   its period at the bottom.

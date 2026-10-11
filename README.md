@@ -135,6 +135,6 @@ The tests never contact a device, run a model or touch your real agent data. CI 
 
 ## License
 
-Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE): free for noncommercial use; commercial use needs separate permission. Contributions are welcome under the same license.
+[MIT](LICENSE). Contributions are welcome; see [CONTRIBUTING](CONTRIBUTING.md).
 
 The characters are drawn in code, inspired by Clawd and Codex. References: [BUSY Bar developer docs](https://docs.busy.app/bar/dev), [busylib](https://github.com/busy-app/busylib-py), [Claude Code hooks](https://code.claude.com/docs/en/hooks), [ccusage](https://ccusage.com/).

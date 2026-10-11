@@ -3,7 +3,7 @@ name = "busy-crew"
 version = "0.1.0"
 description = "Claude and Codex sessions on a BUSY Bar's front LED display"
 readme = "README.md"
-license = "PolyForm-Noncommercial-1.0.0"
+license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 classifiers = [
