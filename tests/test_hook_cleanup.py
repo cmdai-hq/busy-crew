@@ -154,6 +154,26 @@ class HookCleanupTests(unittest.TestCase):
         self.assertTrue(broken.exists())
         self.assertEqual(self.observer.errors, ["claude"])
 
+    def test_corrupt_hook_does_not_disable_orphan_cleanup(self):
+        broken = self.emit("broken", self.now - 7200)
+        broken.write_text("{broken")
+        orphan = self.emit("orphan", self.now - 7200)
+        live = self.emit("live", self.now - 7200)
+        recent = self.emit("recent", self.now)
+        self.native("live")
+        self.observer.poll()
+        self.assertFalse(orphan.exists())
+        for path in (broken, live, recent):
+            self.assertTrue(path.exists())
+        self.assertEqual(self.observer.errors, ["claude"])
+        # The corrupt hook's cached error persists on the next cleanup pass.
+        another = self.emit("another", self.now - 7200)
+        self.now += 3600
+        self.observer.poll()
+        self.assertFalse(another.exists())
+        self.assertTrue(broken.exists())
+        self.assertEqual(self.observer.errors, ["claude"])
+
     def test_cleanup_failure_keeps_display_and_reports_degradation(self):
         stale = self.emit("live", self.now - 86401)
         self.native("live")

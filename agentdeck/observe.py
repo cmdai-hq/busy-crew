@@ -526,13 +526,12 @@ class Observer:
             del self.hook_cache[name]
         return hooks
 
-    def _prune_hooks(self, seen):
+    def _prune_hooks(self, seen, *, registry_complete):
         """Recheck expired snapshots under the writer's lock, without delaying a poll."""
         now = self.clock()
         if now < self.next_hook_cleanup:
             return
         self.next_hook_cleanup = now + HOOK_CLEANUP_INTERVAL
-        registry_complete = "claude" not in self.errors
 
         def expired(snapshot):
             age = now - snapshot["at"]
@@ -574,6 +573,7 @@ class Observer:
     def claude(self):
         hooks, result, seen = self._hooks(), [], set()
         files = self._files(self.claude_root / "sessions", "claude")
+        registry_complete = True  # Hook errors cannot conceal native registry entries.
         for path in files:
             try:
                 data = load_json(path)
@@ -636,13 +636,14 @@ class Observer:
                         state = "working"
                 result.append(self.completion("claude", sid, state, version, completed_at, instance))
             except (OSError, ValueError, TypeError) as exc:
+                registry_complete = False
                 self._error("claude", exc)
         # An invalid file may conceal an existing session; retain its ledger for recovery.
         if "claude" not in self.errors:
             for key in list(set(self.previous) | set(self.results) | set(self.acks)):
                 if key.startswith("claude:") and key not in seen:
                     self._forget(key)
-        self._prune_hooks(seen)
+        self._prune_hooks(seen, registry_complete=registry_complete)
         return result
 
     def _turn_details(self, sid, path, stat, version):
