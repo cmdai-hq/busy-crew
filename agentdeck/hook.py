@@ -58,6 +58,10 @@ def _interaction(data):
     return prefix + "unidentified"
 
 
+DIGEST = "hmac-sha256"  # Recorded in each snapshot: fingerprints from another scheme cannot match.
+LEGACY = "0" * 64  # Stands for a call fingerprinted before the installation key: its digest is unknown.
+
+
 def _tool_fingerprint(data, key=b""):
     """Keyed digest of a tool call: matches a permission to its call without storing the input."""
     if not isinstance(data.get("tool_name"), str) or not isinstance(data.get("tool_input"), dict):
@@ -97,6 +101,13 @@ def update_snapshot(previous, data, at, key=b""):
     resolved = dict(snapshot.get("resolved", {}))
     calls = dict(snapshot.get("calls", {}))
     finished = dict(snapshot.get("finished", {}))
+    if snapshot and snapshot.get("digest") != DIGEST:
+        # Written before the installation key: its fingerprints will never match again. Open calls keep
+        # an unknown digest and a permission keyed by one becomes unidentified, so the next tool result
+        # still clears it.
+        calls, finished = {key: LEGACY for key in calls}, {}
+        for stale in [key for key in pending if key.startswith("permission:") and key != "permission:unidentified"]:
+            pending.setdefault("permission:unidentified", {**pending.pop(stale), "ambiguous": True})
     if event in {"SessionStart", "UserPromptSubmit"}:
         if at < snapshot.get("turn_started_at", 0):
             return snapshot
@@ -140,7 +151,11 @@ def update_snapshot(previous, data, at, key=b""):
         matches = [key for key, digest in calls.items() if digest == fingerprint and key not in resolved] if fingerprint else []
         if not matches and fingerprint and finished.get(fingerprint, -1) >= at:
             return snapshot
-        interaction = matches[0] if len(matches) == 1 else "permission:" + (fingerprint or "unidentified")
+        legacy = [key for key, digest in calls.items() if digest == LEGACY and key not in resolved]
+        if not matches and legacy:
+            interaction = "permission:unidentified"  # Its call may predate the key: the next result clears it.
+        else:
+            interaction = matches[0] if len(matches) == 1 else "permission:" + (fingerprint or "unidentified")
     unidentified = "permission:unidentified"
     if event in {"PermissionRequest", "Elicitation"} or (event == "PreToolUse" and data.get("tool_name") == "AskUserQuestion"):
         if interaction not in resolved:
@@ -181,7 +196,7 @@ def update_snapshot(previous, data, at, key=b""):
 
     if pending and state not in {"closed", "unknown", "ready"}:
         state = "waiting"
-    snapshot.update(schema=2, id=data["session_id"], state=state,
+    snapshot.update(schema=2, digest=DIGEST, id=data["session_id"], state=state,
                     at=max(at, snapshot.get("at", 0)), event=event,
                     pending=pending, calls=dict(list(calls.items())[-1024:]),
                     finished=dict(sorted(finished.items(), key=lambda pair: pair[1])[-128:]),

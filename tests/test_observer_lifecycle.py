@@ -253,6 +253,30 @@ class LifecycleTests(unittest.TestCase):
         self.emit("PostToolUse", tool_use_id="first", **tool)
         self.assertEqual(self.observer.poll()[0].state, "working")
 
+    def test_permission_crossing_the_fingerprint_key_upgrade_still_clears(self):
+        import hashlib
+        self.emit("UserPromptSubmit")
+        self.now += 1
+        tool = {"tool_name": "Bash", "tool_input": {"command": "make deploy"}}
+        self.emit("PreToolUse", tool_use_id="first", **tool)
+        # The same snapshot as written by 1.0.0: unkeyed SHA-256 digests and no digest marker.
+        raw = json.dumps(["Bash", tool["tool_input"]], sort_keys=True, separators=(",", ":")).encode()
+        old = hashlib.sha256(raw).hexdigest()
+        legacy = dict(self.snapshot, calls={"tool:first": old}, pending={"permission:" + old: {"kind": "permission", "at": self.now, "ambiguous": True}})
+        legacy.pop("digest", None)
+        self.snapshot = legacy
+        self.now += 1
+        self.emit("PermissionRequest", **tool)
+        self.native()
+        # Its call cannot be identified across the upgrade: shown as unknown, never as done.
+        self.assertEqual(self.observer.poll()[0].state, "unknown")
+        self.now += 1
+        self.emit("PostToolUse", tool_use_id="first", **tool)
+        self.native()
+        self.assertEqual(self.snapshot["pending"], {})  # Before the fix a stale permission stayed here.
+        self.assertEqual(self.observer.poll()[0].state, "working")
+        self.assertEqual(self.snapshot["digest"], "hmac-sha256")
+
     def test_delayed_permission_write_after_matching_result_does_not_reopen_wait(self):
         self.emit("UserPromptSubmit")
         self.now += 1

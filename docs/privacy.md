@@ -20,14 +20,14 @@ Nothing else leaves the Mac. Over plain HTTP, someone on your network could see 
 | Claude Code hook events (optional, `--no-claude-hooks` turns them off) | Session ID, event name, tool call IDs, timestamps, and a keyed fingerprint of a tool call's name and input to match a permission request to its call | The prompt text and tool inputs that Claude Code sends to every hook: read from stdin, never stored |
 | Codex `state_5.sqlite`, opened read-only | Conversation ID, journal path, last update time | Titles, first messages, previews |
 | Codex `thread_history_1.sqlite`, opened read-only | Last turn ID, its status and completion time | Every other column |
-| Codex conversation journal, from the end back to the start of the last turn | Turn start, end, failure and interruption events; questions and approvals; the call ID of an answer | Messages, reasoning, tool calls and outputs, token counts: recognized from their first bytes and left undecoded |
+| Codex conversation journal, from the end back to the start of the last turn | Turn start, end, failure and interruption events; approvals; question calls (`request_user_input`) and the call ID of their answer | Messages, reasoning, other tool calls, tool outputs, token counts: recognized from their first bytes and left undecoded |
 | ccusage (optional, a third-party tool) | Today's and this month's total tokens per family | ccusage itself reads your Claude Code and Codex usage logs to count them |
 
-A Codex journal is read as bytes, so the content of the last turn passes through memory while Busy Crew looks for the events it needs. It is not parsed, stored, logged or sent.
+A Codex journal is read as bytes, so the content of the last turn passes through memory while Busy Crew looks for the events it needs. Only the records listed above are parsed, including the text of a question the agent asks you and an agent's last message in a turn-end event. Nothing from the journal is stored, logged or sent.
 
 ## What is kept
 
-Everything lives in a private folder (mode `0700`, files `0600`): `~/Library/Application Support/BusyCrew`, or `BusybarAgentDeck` for installations made before 1.0, or `BUSY_CREW_STATE`.
+Everything lives in a private folder (directories `0700`, data files and locks `0600`, the menu bar app's executable `0700`): `~/Library/Application Support/BusyCrew`, or `BusybarAgentDeck` for installations made before 1.0, or `BUSY_CREW_STATE`.
 
 | File | Contents |
 | --- | --- |

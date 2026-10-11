@@ -9,10 +9,10 @@
 - An unreadable Codex journal is no longer rescanned every second until it
   changes, and the service log names why a source failed.
 - Read less: Codex journal records that cannot change a turn (messages,
-  reasoning, tool calls and outputs) are recognized from their first bytes and
-  never decoded, which also makes reading about four times faster; only the
+  reasoning, tool calls other than questions, tool outputs) are recognized from
+  their first bytes and never decoded, which also makes reading about four times faster; only the
   needed Codex columns are queried. Claude hook fingerprints are keyed with a
-  per-installation secret, and `front.png` and `service.lock` are private.
+  per-installation secret (fingerprints recorded before the upgrade are migrated), and `front.png` and `service.lock` are private.
 - Document what Busy Crew reads, keeps and sends in
   [PRIVACY](docs/privacy.md).
 
