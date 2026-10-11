@@ -1,13 +1,13 @@
 [project]
 name = "busy-crew"
-version = "0.1.0"
+version = "1.0.0"
 description = "Claude and Codex sessions on a BUSY Bar's front LED display"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Operating System :: MacOS :: MacOS X",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",

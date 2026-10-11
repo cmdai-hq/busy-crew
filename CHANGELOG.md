@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 — 2026-10-11
+
+First public release, under the MIT License.
 
 - Rename the command to `busy-crew`, the package to `busy-crew` and the menu
   bar app to Busy Crew. `agent-deck` stays as an alias and `AGENT_DECK_STATE`
@@ -18,7 +20,7 @@
   show a sleeping indicator when the Claude family is entirely idle.
 - Isolate global hook imports, record owned hook commands, respect custom roots,
   and make installation conflicts/failures recoverable.
-- Refuse credential-bearing redirects and scope display cleanup to Agent Deck.
+- Refuse credential-bearing redirects and scope display cleanup to Busy Crew.
 - Validate local source and command data, isolate malformed records, and preserve
   successful completion identities across monitor restarts.
 - Correlate pending interactions, recover long-turn boundaries, and distinguish
@@ -34,7 +36,7 @@
   frame changes.
 - Center the Codex character on Clawd in the duo view and keep its face visible
   when dimmed.
-- Add an optional macOS menu bar icon (`agent-deck menubar install`) showing the
+- Add an optional macOS menu bar icon (`uv run busy-crew menubar install`) showing the
   collector's health (stopped, degraded, update available, paused), with
   acknowledge, reload and open-log actions. The collector publishes `health`,
   `code_changed`, `pid` and `started_at` in `status.json`.
