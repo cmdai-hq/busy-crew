@@ -75,8 +75,11 @@ uv run busy-crew snapshot /tmp/front.png --leds       # from another terminal: w
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.busybar.agent-deck.plist   # back to the installed copy
 ```
 
-The foreground collector shares the installed copy's configuration, result
-ledgers and hook events. It can update acknowledgment data in that state folder.
+The foreground collector shares configuration, result ledgers, hook events and
+acknowledgment data only when it uses the installed copy's state folder. The
+LaunchAgent pins that folder as `AGENT_DECK_STATE`; use the same folder if you
+set `BUSY_CREW_STATE` or `AGENT_DECK_STATE` in your terminal. With a different
+folder, foreground changes are not visible to the installed collector.
 A change to the hooks, installer or menu app needs the branch installed instead:
 
 ```sh

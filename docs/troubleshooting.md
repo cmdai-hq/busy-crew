@@ -45,7 +45,7 @@ For a concurrent-edit error:
 3. Compare them with current Claude settings and merge only the intended changes.
 4. Re-run install, repeating `--no-claude-hooks` for passive tracking.
 
-Do not replace the entire settings file with an old backup while Claude or an editor is changing it. Filesystems without atomic-exchange support are refused.
+Do not replace the entire settings file with an old backup while Claude or an editor is changing it. Replacing existing settings requires atomic-exchange support; creating a new settings file does not.
 
 ## Install, uninstall and moving the checkout
 

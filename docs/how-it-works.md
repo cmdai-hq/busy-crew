@@ -64,7 +64,7 @@ Permission requests lack tool IDs in Claude's documented schema. The hook correl
 
 Hooks use isolated Python imports, store status metadata without prompts, make no approval decisions and exit with code 0. They run synchronously with a 2-second timeout and no network access.
 
-`install --no-claude-hooks` uses the native registry alone. Activity remains visible, but busy → idle does not establish a successful response or produce a `✓`. Repeat the option on manual reinstalls; `upgrade` preserves it.
+`install --no-claude-hooks` uses the native registry alone. Activity remains visible, but busy → idle does not establish a successful response or produce a `✓`. Repeat the option on manual reinstalls. For automatic upgrades and older passive installs, see [update guidance](installation.md#updates-and-removal).
 
 ### Codex app and local sessions
 

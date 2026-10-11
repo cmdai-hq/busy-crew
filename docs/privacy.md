@@ -25,9 +25,9 @@ Nothing else leaves the Mac. Over plain HTTP, someone on your network could see 
 | Codex conversation journal | Turn start, end, failure and interruption events; approvals; question calls (`request_user_input`) and the call ID of their answer | Recognized messages, reasoning, other tool calls, tool outputs and token counts are left undecoded |
 | ccusage (optional, a third-party tool) | Today's and this month's total tokens per family | ccusage itself reads your Claude Code and Codex usage logs to count them |
 
-A first read scans backward up to 256 MB to find the selected turn's start. Later reads process only appended records. Journal bytes pass through memory; recognized conversation records are skipped before JSON decoding.
+A first read scans backward up to 256 MB to find the selected turn's start. Later reads process only appended records. Journal bytes pass through memory; recognized messages, reasoning, other tool calls, tool outputs and token counts are skipped before JSON decoding.
 
-Decoded turn events and questions can include question text or the agent's last message. Those records are cached in memory for the current turn. Conversation text is never written to Busy Crew's state files, logged or sent.
+Turn events and question calls are decoded in memory when needed and can include question text or the agent's last message. Those records are cached for the current turn. Conversation text is never written to Busy Crew's state files, logged or sent.
 
 ## What is kept
 

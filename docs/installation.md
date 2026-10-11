@@ -93,7 +93,9 @@ For Homebrew and uv installs, use:
 busy-crew upgrade
 ```
 
-It preserves your settings and hook choice, restarts the collector, and reinstalls the menu icon if present. Update output is saved in `upgrade.log` in the state folder.
+It preserves your settings, restarts the collector, and reinstalls the menu icon if present. Update output is saved in `upgrade.log` in the state folder.
+
+**Passive tracking:** `upgrade` preserves your hook choice when the state folder contains `installation.json`. For older passive installs without this file, update the package manually as below, then run `busy-crew install --no-claude-hooks`.
 
 For a manual package update, run `brew update && brew upgrade busy-crew` or `uv tool upgrade busy-crew`, followed by `busy-crew install`. **Repeat `--no-claude-hooks` if you use passive tracking.** Run `busy-crew menubar install` too if you use the icon.
 

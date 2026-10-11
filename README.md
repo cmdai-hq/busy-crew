@@ -63,7 +63,7 @@ Replace `Europe/Paris` with your IANA time zone. Already-open Claude sessions ma
 
 **Wi-Fi needs API access enabled and a password.** Follow the [installation guide](https://github.com/cmdai-hq/busy-crew/blob/main/docs/installation.md) for Wi-Fi, token counts, uv PATH setup and manual updates.
 
-**Update:** `busy-crew upgrade` keeps your settings and hook choice, restarts the collector and refreshes the menu icon if installed. **Remove:** run `busy-crew uninstall`, then `brew uninstall busy-crew` or `uv tool uninstall busy-crew`.
+**Update:** `busy-crew upgrade` keeps your settings, restarts the collector and refreshes the menu icon if installed. **Remove:** run `busy-crew uninstall`, then `brew uninstall busy-crew` or `uv tool uninstall busy-crew`.
 
 To try a checkout, see [Development](#development). Use `uv run busy-crew` for its commands.
 
@@ -74,7 +74,7 @@ To try a checkout, see [Development](#development). Use `uv run busy-crew` for i
 - **Claude Code hooks**, added after a private settings backup. They record status metadata, never prompts, and make no approval decisions. They run synchronously with a 2-second timeout. Existing hooks and settings are preserved; a conflicting edit fails with recovery copies.
 - **A private state folder**, `~/Library/Application Support/BusyCrew`, for the configuration, backups and the log. Installations made before 1.0 keep `BusybarAgentDeck`.
 
-Use `install --no-claude-hooks` for passive Claude tracking: activity stays visible, but busy → idle alone does not produce a finished `✓`. Repeat that option on every manual reinstall; `upgrade` preserves it automatically.
+Use `install --no-claude-hooks` for passive Claude tracking: activity stays visible, but busy → idle alone does not produce a finished `✓`. Repeat that option on every manual reinstall. For automatic upgrades and older installs, see [passive tracking updates](https://github.com/cmdai-hq/busy-crew/blob/main/docs/installation.md#updates-and-removal).
 
 Re-running `install` keeps the saved address and time zone unless you pass new ones. `busy-crew uninstall` removes the LaunchAgent and the hooks, and keeps the state folder.
 

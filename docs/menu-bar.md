@@ -30,7 +30,7 @@ The menu shows health reasons, the start time, session counts and today's token 
 | --- | --- |
 | Acknowledge results | Same as pressing the scroll wheel; enabled when results can be acknowledged |
 | Refresh tokens now | Starts a background ccusage recount; it can take up to 45 seconds |
-| Update to X | Upgrades Homebrew/uv installs, preserving settings and hook choice, then refreshes the collector and menu app |
+| Update to X | Upgrades Homebrew/uv installs, preserving settings, then refreshes the collector and menu app |
 | Reload collector | Restarts the collector and loads configuration changes |
 | Open log | Opens the private service log |
 
@@ -40,6 +40,6 @@ Update output is saved in `upgrade.log`. A checkout shows manual update instruct
 
 The icon reads `status.json` every 5 seconds and when you open the menu; its size depends on the session count. The icon never reads agent sources or contacts the bar itself. Its update action launches the package manager; the collector checks GitHub for releases ([privacy](privacy.md)).
 
-Use `busy-crew upgrade` for package updates. After a manual package update, run `busy-crew install` and `busy-crew menubar install`; repeat `--no-claude-hooks` for passive tracking.
+Use `busy-crew upgrade` for package updates. For passive tracking, check the [older installation case](installation.md#updates-and-removal) first. After a manual package update, run `busy-crew install` and `busy-crew menubar install`; repeat `--no-claude-hooks` for passive tracking.
 
 In a checkout, **Reload collector** is enough for Python-only changes. Run `uv sync --locked` first if dependencies changed. See [installation and updates](installation.md#updates-and-removal).
