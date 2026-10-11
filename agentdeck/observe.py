@@ -2,6 +2,7 @@ import ctypes
 import json
 import math
 import os
+import re
 import sqlite3
 import struct
 import subprocess
@@ -19,6 +20,10 @@ STATES = {"working", "waiting", "ready", "idle", "unknown"}
 MAX_ROLLOUT_SCAN = 32_000_000
 MAX_RECORD = 2_000_000
 CODEX_DATABASES = ("state_5.sqlite", "thread_history_1.sqlite")
+# Events that change a turn's state (see rollout_details). Any other oversized record is left out.
+TURN_EVENTS = {"task_started", "turn_started", "task_complete", "turn_complete", "turn_aborted", "approval_request",
+               "request_user_input", "approval_response", "user_message", "thread_status_changed"}
+RECORD_HEAD = re.compile(rb'"type"\s*:\s*"([a-z_]+)"\s*,\s*"payload"\s*:\s*\{\s*"type"\s*:\s*"([a-z_]+)"')
 # A finished or failed Codex conversation silent for this long is dead: it leaves the count.
 CODEX_STALE = 7200
 # xnu bsd/sys/proc_info.h: PROC_PIDTBSDINFO fills a 136-byte proc_bsdinfo.
@@ -114,9 +119,22 @@ def record_json(line):
     return record
 
 
+def skip_oversized(head):
+    """Leave out a record over MAX_RECORD when its kind cannot change the turn's state.
+
+    A large tool output (a command's log, an image) must not make the whole source unreadable;
+    a turn event or a function call (question tracking reads them) still must be parsed.
+    """
+    match = RECORD_HEAD.search(head[:4096])
+    kind, payload = (part.decode() for part in match.groups()) if match else (None, None)
+    if not ((kind == "response_item" and payload != "function_call")
+            or (kind == "event_msg" and payload not in TURN_EVENTS)):
+        raise ValueError("Rollout record exceeds size limit")
+
+
 def read_turn(path, turn_id):
     """Read backwards to a verified selected-turn boundary, with explicit limits."""
-    records, buffer, terminated = [], b"", False
+    records, buffer, terminated, oversized, head = [], b"", False, False, b""
     with path.open("rb") as handle:
         position = handle.seek(0, 2)
         floor = max(0, position - MAX_ROLLOUT_SCAN)
@@ -124,7 +142,16 @@ def read_turn(path, turn_id):
             length = min(65536, position - floor)
             position -= length
             handle.seek(position)
-            buffer = handle.read(length) + buffer
+            chunk = handle.read(length)
+            if oversized:
+                # Reading backwards, only the start of an oversized record is kept: it holds its kind.
+                start = chunk.rfind(b"\n")
+                if start < 0:
+                    head = (chunk + head)[:4096]
+                    continue
+                skip_oversized(chunk[start + 1:] + head)
+                oversized, chunk = False, chunk[:start + 1]
+            buffer = chunk + buffer
             if not terminated:
                 # Codex may still be appending the last record: parse only complete lines.
                 end = buffer.rfind(b"\n")
@@ -137,19 +164,27 @@ def read_turn(path, turn_id):
             for line in reversed(lines):
                 if not line:
                     continue
+                if len(line) > MAX_RECORD:
+                    skip_oversized(line)
+                    continue
                 record = record_json(line)
                 records.append(record)
                 payload = record.get("payload", {})
                 if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
                     return list(reversed(records))
             if len(buffer) > MAX_RECORD:
-                raise ValueError("Rollout record exceeds size limit")
-        if floor == 0 and buffer:
-            record = record_json(buffer)
-            records.append(record)
-            payload = record.get("payload", {})
-            if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
-                return list(reversed(records))
+                oversized, head, buffer = True, buffer[:4096], b""
+        if floor == 0 and oversized:
+            skip_oversized(head)  # The file starts with the oversized record.
+        elif floor == 0 and buffer:
+            if len(buffer) > MAX_RECORD:
+                skip_oversized(buffer)
+            else:
+                record = record_json(buffer)
+                records.append(record)
+                payload = record.get("payload", {})
+                if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
+                    return list(reversed(records))
     raise ValueError("Selected turn boundary unavailable")
 
 
@@ -208,6 +243,7 @@ class Observer:
         self.clock, self.alive, self.started = clock, alive, clock()
         self.previous, self.instances, self.tail_cache = {}, {}, {}
         self.errors, self.state_errors = [], set()  # Ledgers that could not be read intact.
+        self.causes = {}  # Provider -> why it failed, for the log; never a path or content.
         self.acks = self._load_state("acknowledged.json")
         self.results = self._load_state("completions.json")
         self.results_dirty = False
@@ -252,9 +288,15 @@ class Observer:
             self.state_errors.add(name)
             return {}
 
-    def _error(self, provider):
+    def _error(self, provider, exc=None):
         if provider not in self.errors:
             self.errors.append(provider)
+        if exc is not None and provider not in self.causes:
+            # Our ValueErrors carry fixed messages; other errors may name a local path.
+            self.causes[provider] = str(exc) if type(exc) is ValueError else type(exc).__name__
+
+    def error_summary(self):
+        return ", ".join(p + (f" ({self.causes[p]})" if p in self.causes else "") for p in self.errors)
 
     def _save_results(self):
         self.results_dirty = True
@@ -486,8 +528,15 @@ class Observer:
                     cache_key = (str(path.resolve()), stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size, version)
                     cached = self.tail_cache.get(sid)
                     if not cached or cached[0] != cache_key:
-                        cached = (cache_key, rollout_details(read_turn(path, version), version))
+                        try:
+                            outcome = rollout_details(read_turn(path, version), version)
+                        except ValueError as exc:
+                            # An unreadable rollout stays so until it changes: don't rescan it every poll.
+                            outcome = str(exc)
+                        cached = (cache_key, outcome)
                         self.tail_cache[sid] = cached
+                    if isinstance(cached[1], str):
+                        raise ValueError(cached[1])
                     details = cached[1]
                     completed_at = details["completed_at"] or completed_at
                     freshness = max(stat.st_mtime, timestamp(thread["updated_at"]))
@@ -510,8 +559,8 @@ class Observer:
                     session = self.completion("codex", sid, state_name, version, completed_at)
                     if session.state != "idle":
                         result.append(session)
-                except (OSError, ValueError, TypeError, sqlite3.Error):
-                    self._error("codex")
+                except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
+                    self._error("codex", exc)
             for sid in set(self.tail_cache) - seen:
                 self.tail_cache.pop(sid, None)
             for key in list(self.previous):
@@ -520,7 +569,7 @@ class Observer:
         return result
 
     def poll(self):
-        sessions, self.errors = [], ["state"] if self.state_errors else []
+        sessions, self.errors, self.causes = [], ["state"] if self.state_errors else [], {}
         if self.results_dirty:
             try:
                 self._save_results()
@@ -529,6 +578,6 @@ class Observer:
         for provider, collect in [("claude", self.claude), ("codex", self.codex)]:
             try:
                 sessions.extend(collect())
-            except (OSError, ValueError, TypeError, sqlite3.Error):
-                self._error(provider)
+            except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
+                self._error(provider, exc)
         return sessions
