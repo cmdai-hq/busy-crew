@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A Codex turn that writes more than 32 MB to its journal (a long run of tool
+  calls) no longer turns the Codex family into `?` with "Selected turn boundary
+  unavailable". The collector finds the turn's start once, reading back up to
+  256 MB, then reads only what Codex appends: about 1 ms per change instead of
+  rereading up to 32 MB every second.
 - **Update to X** works on Macs whose Homebrew is managed by Workbrew: it now
   runs `brew` through the wrapper Homebrew requires (`HOMEBREW_FORCE_BREW_WRAPPER`,
   from the environment or `brew.env`), even with launchd's minimal `PATH`.
