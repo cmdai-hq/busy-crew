@@ -19,6 +19,8 @@ STATES = {"working", "waiting", "ready", "idle", "unknown"}
 MAX_ROLLOUT_SCAN = 32_000_000
 MAX_RECORD = 2_000_000
 CODEX_DATABASES = ("state_5.sqlite", "thread_history_1.sqlite")
+# A finished or failed Codex conversation silent for this long is dead: it leaves the count.
+CODEX_STALE = 7200
 # xnu bsd/sys/proc_info.h: PROC_PIDTBSDINFO fills a 136-byte proc_bsdinfo.
 PROC_PIDTBSDINFO, BSDINFO_SIZE, BSDINFO_PID, BSDINFO_START = 3, 136, 12, 120
 
@@ -441,28 +443,14 @@ class Observer:
         self.known_sources["codex"] = True
         result, now, seen = [], self.clock(), set()
         with closing(readonly_db(state_db)) as state, closing(readonly_db(history_db)) as history:
-            # Pending completions stay eligible until acknowledged or their thread is removed.
             threads = state.execute("""SELECT id, rollout_path, updated_at FROM threads
                 WHERE archived=0 AND agent_path IS NULL AND thread_source='user'
-                AND updated_at > ? ORDER BY updated_at DESC LIMIT 200""", (now - 86400,)).fetchall()
-            threads = list(threads)
+                AND updated_at > ? ORDER BY updated_at DESC LIMIT 200""", (now - CODEX_STALE,)).fetchall()
             ids = {row["id"] for row in threads}
-            retained = set(self.results) | set(self.acks)
-            # Check saved identities in bounded batches; acknowledgements survive the
-            # recent-thread window, but not an explicitly removed/archived thread.
-            old = [key for key in retained if key.startswith("codex:") and key[6:] not in ids]
-            for offset in range(0, len(old), 200):
-                keys = old[offset:offset + 200]
-                placeholders = ",".join("?" for _ in keys)
-                rows = state.execute(f"""SELECT id, rollout_path, updated_at FROM threads WHERE id IN ({placeholders})
-                    AND archived=0 AND agent_path IS NULL AND thread_source='user'""", [key[6:] for key in keys]).fetchall()
-                eligible = {row["id"]: row for row in rows}
-                for key in keys:
-                    sid = key[6:]
-                    if sid not in eligible:
-                        self._forget(key)
-                    elif key in self.results:
-                        threads.append(eligible[sid])
+            # Results and acknowledgements die with their conversation: archived, or silent too long.
+            for key in set(self.results) | set(self.acks):
+                if key.startswith("codex:") and key[6:] not in ids:
+                    self._forget(key)
             for thread in threads:
                 sid = None
                 try:
@@ -489,17 +477,22 @@ class Observer:
                         self.tail_cache[sid] = cached
                     details = cached[1]
                     completed_at = details["completed_at"] or completed_at
+                    freshness = max(stat.st_mtime, timestamp(thread["updated_at"]))
                     if details["superseded"] or details["terminal"] in {"failed", "aborted"} or status in {"failed", "interrupted", "cancelled", "canceled"}:
                         state_name = "unknown"
                     elif details["terminal"] == "completed" or status == "completed":
                         state_name = "ready"
                     elif status == "inProgress":
-                        freshness = max(stat.st_mtime, timestamp(thread["updated_at"]))
                         if now - freshness > 900:
                             continue
                         state_name = "waiting" if details["waiting"] else "working"
                     else:
                         state_name = "unknown"
+                    # A finished turn ages from its completion, so a later rename cannot revive it.
+                    last = completed_at if completed_at and not details["superseded"] else freshness
+                    if state_name in {"ready", "unknown"} and now - last > CODEX_STALE:
+                        self._forget("codex:" + sid)
+                        continue
                     session = self.completion("codex", sid, state_name, version, completed_at)
                     if session.state != "idle":
                         result.append(session)

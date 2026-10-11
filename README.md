@@ -35,7 +35,8 @@ Sessions requiring interaction appear first. There is no custom display on the r
 When an agent finishes a response while the monitor is running, its session shows a green `✓`. The check mark is kept across monitor restarts, so you don't miss a response that finished while you were away. It clears when any of these happens:
 - you acknowledge it;
 - the session starts new work;
-- the session goes away: a closed Claude process, or an archived Codex conversation.
+- the session goes away: a closed Claude process, or an archived Codex conversation;
+- a Codex response finished more than two hours ago: that conversation is considered dead.
 
 A `✓` **counts toward its family's total.** For example, "Codex 5" can mean five finished conversations waiting for acknowledgment, with nothing working.
 
@@ -53,7 +54,7 @@ Only the results the bar is showing are acknowledged, so nothing is acknowledged
 
 Acknowledgment never sends anything to an agent: it doesn't answer a question or grant a permission. It also leaves two indicators alone:
 - **Yellow `!`:** the agent is waiting for you. Answer it in Claude or Codex.
-- **Gray `?`:** an unknown state. A Claude `?`, for example after a failed turn, clears with the session's next activity. A failed, interrupted or cancelled Codex turn stays counted while its conversation was updated within the last 24 hours. A response blocked by Codex's own content filter counts as failed. That `?` disappears when you archive the conversation or send it a new message.
+- **Gray `?`:** an unknown state. A Claude `?`, for example after a failed turn, clears with the session's next activity. A failed, interrupted or cancelled Codex turn stays counted while its conversation was updated within the last two hours. A response blocked by Codex's own content filter counts as failed. That `?` disappears when you archive the conversation or send it a new message.
 
 ## Installation on macOS
 
@@ -123,11 +124,11 @@ The tokens view shows today's totals **by agent family**, refreshed every two mi
 
 Permission requests lack tool IDs in Claude's documented schema. Agent Deck correlates them with a unique preceding tool call using an input hash, storing only that hash and the call ID. Identical concurrent calls and notifications/elicitation events without a usable identity remain unknown instead of guessing which interaction was resolved. The payload contents are never persisted.
 
-**Codex Mac / local sessions**: read-only access to `~/.codex/state_5.sqlite`, `thread_history_1.sqlite`, and rollout events. The latest turn of each user conversation is used; archived conversations and subagents are excluded. If the rollout already contains a newer root turn than SQLite, the previous completion is cleared and the session remains unknown until the sources agree. Old incomplete turns are not counted: an `inProgress` turn with no local writes for 15 minutes is discarded. This threshold avoids ghost sessions, but can also hide a very long, silent turn or an extended wait.
+**Codex Mac / local sessions**: read-only access to `~/.codex/state_5.sqlite`, `thread_history_1.sqlite`, and rollout events. The latest turn of each user conversation is used; archived conversations and subagents are excluded. A finished or failed conversation silent for two hours is dead and leaves the count, along with its `✓`. If the rollout already contains a newer root turn than SQLite, the previous completion is cleared and the session remains unknown until the sources agree. Old incomplete turns are not counted: an `inProgress` turn with no local writes for 15 minutes is discarded. This threshold avoids ghost sessions, but can also hide a very long, silent turn or an extended wait.
 
 Activity in this Codex chat was verified locally; completion and question transitions are covered by tests using controlled events. Synchronous question detection uses rollout events when available. **These files do not expose every approval request from the Codex app: yellow indicators for Codex provide only partial coverage.** An asynchronous question does not incorrectly mark a still-active session as waiting. Codex's internal databases and formats can change: a read incompatibility displays a `?` without modifying the app's data. Tasks orchestrated in the cloud and sessions on other machines are not tracked.
 
-At its first startup, the monitor ignores old completed responses. It persists new unacknowledged results across monitor restarts, until acknowledgment or new work; notifications disappear when their source session is closed or unavailable. A transition to idle alone does not establish a successful response. A source error does not reuse the last known count. Bitmaps have a 15-second lease; the loop targets a renewal every 5 seconds, subject to observation and I/O delays. If the Mac or program becomes unavailable, the firmware lease expires. A higher-priority application can take over; the program does not raise its priority to displace it, and cleanup is scoped to Agent Deck.
+At its first startup, the monitor ignores old completed responses. It persists new unacknowledged results across monitor restarts, until acknowledgment or new work (two hours at most for Codex); notifications disappear when their source session is closed or unavailable. A transition to idle alone does not establish a successful response. A source error does not reuse the last known count. Bitmaps have a 15-second lease; the loop targets a renewal every 5 seconds, subject to observation and I/O delays. If the Mac or program becomes unavailable, the firmware lease expires. A higher-priority application can take over; the program does not raise its priority to displace it, and cleanup is scoped to Agent Deck.
 
 The program reads the local files needed for tracking and ccusage, but does not copy them into the repository or send any conversation content to the bar. It sends only pixels. It does not change the bar's brightness, network, or WARP settings. See [compatibility and distribution notes](docs/COMPATIBILITY.md) for the tested contracts and dependency licenses.
 
