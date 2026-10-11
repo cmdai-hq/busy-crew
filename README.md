@@ -122,6 +122,8 @@ More, including Claude settings conflicts and recovery: [troubleshooting](docs/t
 
 Limits worth knowing: Codex approval requests are only partly visible, cloud tasks and other machines aren't tracked. Details: [how it works](docs/how-it-works.md), [tested versions](docs/COMPATIBILITY.md).
 
+**Privacy:** nothing leaves your Mac except pixels to your bar, and conversation content is never parsed, stored or logged. [What is read, kept and sent](docs/privacy.md).
+
 ## Development
 
 ```sh

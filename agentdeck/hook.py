@@ -1,10 +1,12 @@
 """Private status only: no network, approval decisions, or prompt persistence."""
 import argparse
 import hashlib
+import hmac
 import json
 import math
 import os
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -56,14 +58,35 @@ def _interaction(data):
     return prefix + "unidentified"
 
 
-def _tool_fingerprint(data):
+def _tool_fingerprint(data, key=b""):
+    """Keyed digest of a tool call: matches a permission to its call without storing the input."""
     if not isinstance(data.get("tool_name"), str) or not isinstance(data.get("tool_input"), dict):
         return None
     raw = json.dumps([data["tool_name"], data["tool_input"]], sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(raw).hexdigest() if len(raw) <= MAX_INPUT else None
+    return hmac.new(key, raw, hashlib.sha256).hexdigest() if len(raw) <= MAX_INPUT else None
 
 
-def update_snapshot(previous, data, at):
+def fingerprint_key(runtime):
+    """Per-installation secret: a stored fingerprint cannot be matched against guessed commands."""
+    path = runtime / "fingerprint.key"
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        pass
+    fd, temporary = tempfile.mkstemp(dir=runtime, prefix=".key-")
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(os.urandom(32))
+        try:
+            os.link(temporary, path)  # Atomic: the first concurrent hook wins, the others read its key.
+        except FileExistsError:
+            pass
+        return path.read_bytes()
+    finally:
+        os.unlink(temporary)
+
+
+def update_snapshot(previous, data, at, key=b""):
     """Reduce per-call status under a lock; resolved IDs reject delayed PreToolUse."""
     state = hook_state(data)
     event = data.get("hook_event_name")
@@ -99,7 +122,7 @@ def update_snapshot(previous, data, at):
     interaction = _interaction(data)
     if event in {"PreToolUse", "PostToolUse", "PostToolUseFailure", "ElicitationResult"} and interaction in resolved and interaction not in pending:
         return snapshot  # Duplicate delivery cannot reopen a completed response.
-    fingerprint = _tool_fingerprint(data)
+    fingerprint = _tool_fingerprint(data, key)
     if event == "PreToolUse" and fingerprint and not interaction.endswith(":unidentified"):
         calls[interaction] = fingerprint
         permission = "permission:" + fingerprint
@@ -236,7 +259,7 @@ def main(argv=None):
                 previous = load_json(path, {})
             except (OSError, ValueError):
                 previous = {}
-            write_json(path, update_snapshot(previous, data, at))
+            write_json(path, update_snapshot(previous, data, at, fingerprint_key(runtime)))
     except (Exception, SystemExit):
         pass
 

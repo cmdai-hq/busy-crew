@@ -136,6 +136,20 @@ class RenderingTests(unittest.TestCase):
 
 
 class HookTests(unittest.TestCase):
+    def test_tool_fingerprint_is_keyed_per_installation(self):
+        from agentdeck.hook import _tool_fingerprint, fingerprint_key
+        call = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            key_a, key_b = fingerprint_key(Path(first)), fingerprint_key(Path(second))
+            self.assertEqual(fingerprint_key(Path(first)), key_a)
+            self.assertEqual(len(key_a), 32)
+            self.assertEqual((Path(first) / "fingerprint.key").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(Path(first).iterdir()), [Path(first) / "fingerprint.key"])
+            self.assertNotEqual(_tool_fingerprint(call, key_a), _tool_fingerprint(call, key_b))
+            import hashlib, json
+            plain = hashlib.sha256(json.dumps(["Bash", {"command": "ls"}], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            self.assertNotEqual(_tool_fingerprint(call, key_a), plain)
+
     def test_permission_and_question_are_waiting(self):
         self.assertEqual(hook_state({"hook_event_name": "PermissionRequest"}), "waiting")
         self.assertEqual(hook_state({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion"}), "waiting")

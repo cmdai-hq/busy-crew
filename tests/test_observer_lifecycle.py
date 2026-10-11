@@ -589,6 +589,40 @@ class LifecycleTests(unittest.TestCase):
         self.observer._error("codex", observe.SourceError("Rollout record exceeds size limit"))
         self.assertEqual(self.observer.error_summary(), "codex (Rollout record exceeds size limit)")
 
+    def content_line(self, kind, payload_type, **head):
+        """A record whose content is not even valid JSON: reading it would fail the turn."""
+        fields = "".join(f',"{key}":"{value}"' for key, value in head.items())
+        return ('{"timestamp":"2026-10-11T10:00:00Z","ordinal":7,"type":"%s","payload":{"type":"%s"%s,'
+                '"content":[{"text":"private conversation text' % (kind, payload_type, fields))
+
+    def test_conversation_content_is_never_decoded(self):
+        self.codex_fixture([event("task_started", turn_id="turn")], "completed", self.now)
+        with self.rollout.open("a") as stream:
+            for line in [self.content_line("response_item", "message"),
+                         self.content_line("response_item", "reasoning"),
+                         self.content_line("event_msg", "agent_message"),
+                         self.content_line("response_item", "function_call", id="fc", name="shell"),
+                         self.content_line("response_item", "custom_tool_call_output", id="o", call_id="c")]:
+                stream.write(line + "\n")
+            stream.write(json.dumps(event("task_complete", turn_id="turn")) + "\n")
+        self.assertEqual(self.observer.poll()[0].state, "ready")
+        self.assertFalse(self.observer.errors)
+
+    def test_question_and_answer_are_tracked_without_reading_the_answer(self):
+        self.codex_fixture([event("task_started", turn_id="turn"),
+                            function("function_call", name="request_user_input", call_id="question")])
+        self.assertEqual(self.observer.poll()[0].state, "waiting")
+        with self.rollout.open("a") as stream:
+            stream.write(self.content_line("response_item", "function_call_output", id="o", call_id="question") + "\n")
+        self.assertEqual(self.observer.poll()[0].state, "working")
+
+    def test_user_message_ends_a_wait_without_reading_its_text(self):
+        self.codex_fixture([event("task_started", turn_id="turn"), event("approval_request", turn_id="turn")])
+        self.assertEqual(self.observer.poll()[0].state, "waiting")
+        with self.rollout.open("a") as stream:
+            stream.write(self.content_line("event_msg", "user_message") + "\n")
+        self.assertEqual(self.observer.poll()[0].state, "working")
+
     def test_unreadable_rollout_is_not_rescanned_until_it_changes(self):
         self.codex_fixture([function("function_call", name="request_user_input", call_id="q")])
         with patch("agentdeck.observe.read_turn", wraps=read_turn) as reader:
