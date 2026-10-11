@@ -7,6 +7,12 @@
   unavailable". The collector finds the turn's start once, reading back up to
   256 MB, then reads only what Codex appends: about 1 ms per change instead of
   rereading up to 32 MB every second.
+- **Update to X** works on Macs whose Homebrew is managed by Workbrew: it now
+  runs `brew` through the wrapper Homebrew requires (`HOMEBREW_FORCE_BREW_WRAPPER`,
+  from the environment or `brew.env`), even with launchd's minimal `PATH`.
+- **Update to X** runs `brew update` before `brew upgrade busy-crew`, so a
+  release published minutes ago is found even when Homebrew has not refreshed
+  its taps yet. The README's manual update does the same.
 
 ## 1.1.1 — 2026-10-11
 
