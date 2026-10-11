@@ -502,6 +502,7 @@ class Observer:
                     else:
                         state_name = "unknown"
                     # A finished turn ages from its completion, so a later rename cannot revive it.
+                    # The last write stands in when no completion time is recorded or a newer turn started.
                     last = completed_at if completed_at and not details["superseded"] else freshness
                     if state_name in {"ready", "unknown"} and now - last > CODEX_STALE:
                         self._forget("codex:" + sid)
