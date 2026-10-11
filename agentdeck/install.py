@@ -38,9 +38,34 @@ def menubar_agent_path():
     return Path.home() / "Library/LaunchAgents" / (MENU_LABEL + ".plist")
 
 
-def hook_command(runtime=None):
+def _homebrew_opt(executable):
+    """Homebrew's `opt` link for an interpreter inside a versioned Cellar folder, if present."""
+    parts = Path(executable).parts
+    if "Cellar" not in parts:
+        return None
+    cellar = parts.index("Cellar")
+    if len(parts) < cellar + 4:  # Cellar/<formula>/<version>/<path inside the keg>
+        return None
+    stable = Path(*parts[:cellar], "opt", parts[cellar + 1], *parts[cellar + 3:])
+    return stable if stable.exists() else None
+
+
+def interpreter(python=None):
+    """The Python that LaunchAgents and hooks run: `--python`, `BUSY_CREW_PYTHON`, else this one.
+
+    Homebrew runs the package from `Cellar/<formula>/<version>`, which `brew cleanup`
+    deletes after an upgrade; its `opt` link follows the installed version instead.
+    """
+    chosen = python or os.environ.get("BUSY_CREW_PYTHON")
+    if not chosen:
+        chosen = _homebrew_opt(sys.executable) or sys.executable
+    return os.path.abspath(os.path.expanduser(chosen))
+
+
+def hook_command(runtime=None, python=None):
     runtime = (runtime or state_dir()).absolute()
-    return f"{shlex.quote(sys.executable)} -I -m agentdeck.hook --runtime {shlex.quote(str(runtime))}"
+    python = python or interpreter()
+    return f"{shlex.quote(python)} -I -m agentdeck.hook --runtime {shlex.quote(str(runtime))}"
 
 
 @contextmanager
@@ -223,7 +248,7 @@ def _legacy_commands(plist):
     return {f"{shlex.quote(args[0])} -m agentdeck.hook"}
 
 
-def _plan_one_hooks(path, enabled, owned, runtime):
+def _plan_one_hooks(path, enabled, owned, runtime, python=None):
     before = _read_bytes(path)
     data = load_json(path, {})
     hooks = data.get("hooks", {})
@@ -255,7 +280,7 @@ def _plan_one_hooks(path, enabled, owned, runtime):
         else:
             changed_hooks.pop(event, None)
     if enabled:
-        command = hook_command(runtime)
+        command = hook_command(runtime, python)
         for event in sorted(EVENTS):
             changed_hooks.setdefault(event, []).append({"hooks": [{"type": "command", "command": command, "timeout": 2}]})
     if changed_hooks or "hooks" in data:
@@ -265,14 +290,14 @@ def _plan_one_hooks(path, enabled, owned, runtime):
     return path, before, _json_bytes(updated)
 
 
-def _hook_plans(enabled, runtime, manifest, old_plist=None, root=None):
+def _hook_plans(enabled, runtime, manifest, old_plist=None, root=None, python=None):
     target = (root or claude_dir()) / "settings.json"
     owned = set(manifest.get("hook_commands", []))
     old_target = Path(manifest.get("hook_settings", str(target)))
     if not manifest:
         owned.update(_legacy_commands(old_plist))
     new_manifest = {"version": 1, "hook_settings": str(target),
-                    "hook_commands": [hook_command(runtime)] if enabled else []}
+                    "hook_commands": [hook_command(runtime, python)] if enabled else []}
     if not enabled and not owned:
         # A first passive installation has no reason to inspect or rewrite
         # another application's settings (including symlinks or broken JSON).
@@ -282,7 +307,7 @@ def _hook_plans(enabled, runtime, manifest, old_plist=None, root=None):
         old_plan = _plan_one_hooks(old_target, False, owned, runtime)
         if old_plan:
             plans.append(old_plan)
-    plan = _plan_one_hooks(target, enabled, owned, runtime)
+    plan = _plan_one_hooks(target, enabled, owned, runtime, python)
     if plan:
         plans.append(plan)
     return plans, new_manifest
@@ -310,12 +335,12 @@ def _rollback(changes):
     return errors
 
 
-def set_hooks(enabled):
+def set_hooks(enabled, python=None):
     runtime = state_dir()
     with _installation_lock(runtime):
         manifest = _load_manifest(runtime)
         old_plist = _read_plist(launch_agent_path())
-        plans, updated = _hook_plans(enabled, runtime, manifest, old_plist, _recorded_root(manifest))
+        plans, updated = _hook_plans(enabled, runtime, manifest, old_plist, _recorded_root(manifest), python)
         manifest_path = runtime / MANIFEST
         before = _read_bytes(manifest_path)
         changes = []
@@ -343,22 +368,25 @@ def _read_plist(path, label=LABEL):
     return data
 
 
-def _preflight(address, timezone, *, imports=True):
+def _preflight(address, timezone, python=None, *, imports=True):
     if sys.platform != "darwin":
         raise RuntimeError("Busy Crew installation is supported only on macOS")
     launchctl = shutil.which("launchctl")
     if not launchctl:
         raise RuntimeError("launchctl is unavailable")
-    if not Path(sys.executable).is_file() or not os.access(sys.executable, os.X_OK):
-        raise RuntimeError("Python interpreter is unavailable")
+    if python is not None and (not Path(python).is_file() or not os.access(python, os.X_OK)):
+        raise RuntimeError(f"Python interpreter is unavailable: {python}")
     if address is not None:
         _validate_address(address)
     if timezone is not None:
         ZoneInfo(timezone)
     # Import only: this does not instantiate a service or contact an appliance.
-    if imports:
-        subprocess.run([sys.executable, "-I", "-c", "import agentdeck.cli, busylib; from PIL import Image"],
-                       check=True, capture_output=True, timeout=10)
+    if imports and python is not None:
+        try:
+            subprocess.run([python, "-I", "-c", "import agentdeck.cli, busylib; from PIL import Image"],
+                           check=True, capture_output=True, timeout=10)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(f"Busy Crew is not installed for this Python: {python}") from exc
     return launchctl
 
 
@@ -399,8 +427,9 @@ def _bootstrap(launchctl, domain, path, label=LABEL):
         raise RuntimeError("LaunchAgent was not loaded after bootstrap")
 
 
-def install(address=None, timezone=None, hooks=True):
-    launchctl = _preflight(address, timezone)
+def install(address=None, timezone=None, hooks=True, python=None):
+    python = interpreter(python)
+    launchctl = _preflight(address, timezone, python)
     runtime = state_dir()
     with _installation_lock(runtime):
         config_path = runtime / "config.json"
@@ -426,10 +455,10 @@ def install(address=None, timezone=None, hooks=True):
         plist_before = _read_bytes(path)
         old_plist = _read_plist(path)
         manifest = _load_manifest(runtime)
-        hook_plans, updated = _hook_plans(hooks, runtime, manifest, old_plist, Path(config["claude_dir"]))
+        hook_plans, updated = _hook_plans(hooks, runtime, manifest, old_plist, Path(config["claude_dir"]), python)
         manifest_path = runtime / MANIFEST
         manifest_before = _read_bytes(manifest_path)
-        service = {"Label": LABEL, "ProgramArguments": [sys.executable, "-I", "-m", "agentdeck.cli", "run"],
+        service = {"Label": LABEL, "ProgramArguments": [python, "-I", "-m", "agentdeck.cli", "run"],
                    "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 10,
                    "WorkingDirectory": str(runtime),
                    "EnvironmentVariables": {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -518,9 +547,10 @@ def _swift_compiler():
     raise RuntimeError("Swift compiler unavailable; run `xcode-select --install` and retry")
 
 
-def install_menubar():
+def install_menubar(python=None):
     """Compile the optional menu bar app, then swap it in with its own LaunchAgent."""
-    launchctl = _preflight(None, None, imports=False)
+    python = interpreter(python)
+    launchctl = _preflight(None, None, python)  # The app's actions run `python -m agentdeck.cli`.
     xcrun = _swift_compiler()
     runtime = state_dir()
     build = Path(tempfile.mkdtemp(prefix=".menubar-build-", dir=runtime))
@@ -531,13 +561,13 @@ def install_menubar():
         if result.returncode != 0 or not built.is_file():
             raise RuntimeError("Menu bar app failed to compile:\n" + (result.stderr or "")[-2000:])
         with _installation_lock(runtime):
-            _deploy_menubar(launchctl, runtime, built)
+            _deploy_menubar(launchctl, runtime, built, python)
     finally:
         shutil.rmtree(build, ignore_errors=True)
     print("Installed the menu bar status icon")
 
 
-def _deploy_menubar(launchctl, runtime, built):
+def _deploy_menubar(launchctl, runtime, built, python):
     path = menubar_agent_path()
     plist_before = _read_bytes(path)
     _read_plist(path, MENU_LABEL)  # Refuse to replace a plist Busy Crew does not own.
@@ -547,7 +577,7 @@ def _deploy_menubar(launchctl, runtime, built):
              # Restarted after a crash, but "Quit menu icon" (exit 0) stays closed until next login.
              "KeepAlive": {"SuccessfulExit": False}, "LimitLoadToSessionType": "Aqua",
              "ProcessType": "Interactive",
-             "EnvironmentVariables": {"AGENT_DECK_STATE": str(runtime), "AGENT_DECK_PYTHON": sys.executable,
+             "EnvironmentVariables": {"AGENT_DECK_STATE": str(runtime), "AGENT_DECK_PYTHON": python,
                                       "AGENT_DECK_LABEL": LABEL},
              "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"}
     domain = "gui/" + str(os.getuid())

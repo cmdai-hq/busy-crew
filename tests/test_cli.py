@@ -35,6 +35,15 @@ class CliTests(unittest.TestCase):
                 self.run_cli("ack")
             self.assertFalse((self.runtime / "inbox").exists())
 
+    def test_install_and_menubar_forward_the_python_option(self):
+        with patch("agentdeck.install.install") as install, patch("agentdeck.install.install_menubar") as menubar:
+            self.run_cli("install", "--python", "/fictional/python")
+            self.run_cli("menubar", "install", "--python", "/fictional/python")
+            self.run_cli("install")
+        self.assertEqual(install.call_args_list[0].args, (None, None, True, "/fictional/python"))
+        self.assertEqual(install.call_args_list[1].args, (None, None, True, None))
+        menubar.assert_called_once_with("/fictional/python")
+
     def test_status_omits_conversation_identity(self):
         write_json(self.runtime / "status.json", {
             "at": time.time(), "sessions": [{"provider": "claude", "state": "idle",

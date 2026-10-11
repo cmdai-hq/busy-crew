@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `install` and `menubar install` write an interpreter path that survives
+  package upgrades: inside Homebrew's versioned `Cellar` folder, they use the
+  formula's `opt` link instead. `--python` or `BUSY_CREW_PYTHON` choose
+  another interpreter, and `install` checks that it can run Busy Crew before
+  changing anything.
 - Publish to PyPI: `uv tool install busy-crew` installs it without a
   checkout. A published GitHub release builds, tests and uploads the wheel
   and sdist through PyPI trusted publishing. The README describes the
