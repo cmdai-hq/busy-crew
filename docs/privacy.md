@@ -39,13 +39,29 @@ Everything lives in a private folder (directories `0700`, data files and locks `
 | `status.json` | Session and turn IDs, their states, token totals, collector health |
 | `completions.json` | Session and turn IDs of finished responses, completion times and process identity when available |
 | `acknowledged.json` | Session and turn IDs of responses you acknowledged |
-| `hooks/*.json` | One file per Claude session: IDs, timestamps, keyed tool fingerprints |
+| `hooks/*.json` | One snapshot per Claude session: IDs, timestamps, keyed tool fingerprints; cleaned up hourly as described below |
+| `hooks/*.lock` | Empty per-session synchronization files, retained to keep concurrent hooks on the same lock |
 | `fingerprint.key` | The random per-installation key for those fingerprints, so a fingerprint cannot be matched against guessed commands |
 | `service.log` | Starts, stops and source or device status, with Busy Crew's own error messages only: never a path or conversation content |
 | `front.png` | The last frame sent to the bar |
 | `update.json` | When the latest release was last checked, and its version |
 | `upgrade.log` | The output of the last `busy-crew upgrade` |
 | `claude-settings-*.json`, `recovery/` | Backups of your Claude settings made before installing or removing hooks |
+
+While running, the collector checks hook snapshots once an hour. It deletes
+those older than 24 hours, and those older than an hour whose session is
+absent from Claude's native registry. Unreadable snapshots are retained and
+reported as a source error; an unreadable registry prevents deletion based on
+absence. Age-based cleanup continues even when the registry directory disappears
+or cannot be read. An initially absent registry is normal, but cannot establish
+orphanhood either. A hook currently writing is skipped until a later check. Empty lock
+files remain after their snapshots are deleted.
+
+Orphan decisions use a complete scan of native session identifiers. A malformed
+or vanished native record makes that scan incomplete; hook corruption and result
+ledger write failures cannot alter the identifiers that were read. Maximum-age
+cleanup still runs when result persistence fails. The hourly interval uses
+elapsed monotonic time, so adjusting the system clock cannot trigger extra passes.
 
 `uninstall` keeps this folder so you can recover a backup; delete it yourself when you no longer need it.
 

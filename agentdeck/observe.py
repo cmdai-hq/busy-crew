@@ -1,4 +1,6 @@
 import ctypes
+import fcntl
+import hashlib
 import json
 import math
 import os
@@ -21,6 +23,9 @@ STATES = {"working", "waiting", "ready", "idle", "unknown"}
 MAX_ROLLOUT_SCAN = 256_000_000
 MAX_RECORD = 2_000_000
 CODEX_DATABASES = ("state_5.sqlite", "thread_history_1.sqlite")
+HOOK_MAX_AGE = 86400
+HOOK_CLEANUP_INTERVAL = 3600
+HOOK_ORPHAN_GRACE = 3600
 # Events that change a turn's state (see rollout_details). Any other oversized record is left out.
 TURN_EVENTS = {"task_started", "turn_started", "task_complete", "turn_complete", "turn_aborted", "approval_request",
                "request_user_input", "approval_response", "user_message", "thread_status_changed"}
@@ -43,7 +48,9 @@ PROC_PIDTBSDINFO, BSDINFO_SIZE, BSDINFO_PID, BSDINFO_START = 3, 136, 12, 120
 
 
 def identifier(value):
-    if not isinstance(value, str) or not 0 < len(value) <= 200 or any(ord(c) < 32 for c in value):
+    """Validate identifiers that can be hashed and persisted as UTF-8 metadata."""
+    if not isinstance(value, str) or not 0 < len(value) <= 200 or any(
+            ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in value):
         raise SourceError("Invalid session/turn identifier")
     return value
 
@@ -325,13 +332,19 @@ def rollout_state(records, turn_id):
 
 
 class Observer:
-    def __init__(self, runtime, home=None, clock=time.time, alive=pid_matches, claude_root=None, codex_root=None):
+    """Observe local agent activity and maintain private completion and hook state."""
+
+    def __init__(self, runtime, home=None, clock=time.time, alive=pid_matches, claude_root=None, codex_root=None,
+                 monotonic=time.monotonic):
+        """Restore local result ledgers and initialize source caches and cleanup cadence."""
         self.runtime = Path(runtime)
         self.home = home or Path.home()
         self.claude_root = Path(claude_root) if claude_root is not None else claude_dir(self.home)
         self.codex_root = Path(codex_root) if codex_root is not None else codex_dir(self.home)
         self.clock, self.alive, self.started = clock, alive, clock()
+        self.monotonic = monotonic
         self.previous, self.instances, self.tail_cache, self.hook_cache = {}, {}, {}, {}
+        self.next_hook_cleanup = None
         self.errors, self.state_errors = [], set()  # Ledgers that could not be read intact.
         self.causes = {}  # Provider -> why it failed, for the log; never a path or content.
         self.acks = self._load_state("acknowledged.json")
@@ -488,6 +501,7 @@ class Observer:
             return exc
 
     def _hooks(self):
+        """Cache validated snapshots by file identity while preserving source errors."""
         hooks = {}
         directory = self.runtime / "hooks"
         if not directory.exists():
@@ -505,7 +519,7 @@ class Observer:
             except OSError as exc:
                 self._error("claude", exc)
                 continue
-            # Snapshots accumulate, one per session ever seen: only a rewritten one is read again.
+            # Only a rewritten snapshot is read again between hourly cleanup passes.
             # A hook replaces its file atomically, so every write brings a new inode.
             change = (stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
             cached = self.hook_cache.get(path.name)
@@ -520,78 +534,145 @@ class Observer:
             del self.hook_cache[name]
         return hooks
 
-    def claude(self):
-        hooks, result, seen = self._hooks(), [], set()
-        files = self._files(self.claude_root / "sessions", "claude")
+    def _prune_hooks(self, seen, *, registry_complete):
+        """Recheck expired snapshots under the writer's lock, without delaying a poll."""
+        elapsed = self.monotonic()
+        if self.next_hook_cleanup is not None and elapsed < self.next_hook_cleanup:
+            return
+        self.next_hook_cleanup = elapsed + HOOK_CLEANUP_INTERVAL
+        now = self.clock()
+
+        def expired(snapshot):
+            """Require elapsed retention, and a complete registry for orphan decisions."""
+            age = now - snapshot["at"]
+            return age > HOOK_MAX_AGE or (registry_complete and age > HOOK_ORPHAN_GRACE
+                                           and "claude:" + snapshot["id"] not in seen)
+
+        directory = self.runtime / "hooks"
+        for name, (_, snapshot) in list(self.hook_cache.items()):
+            if not isinstance(snapshot, dict) or not expired(snapshot):
+                continue
+            # Only names produced by hook.main share its per-session lock.
+            key = hashlib.sha256(snapshot["id"].encode()).hexdigest()
+            if name != key + ".json":
+                continue
+            path = directory / name
+            try:
+                flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+                fd = os.open(directory / (key + ".lock"), flags, 0o600)
+                with os.fdopen(fd, "a") as lock:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        continue  # A hook is writing; reconsider it on the next cleanup pass.
+                    current = self._hook(path)
+                    if isinstance(current, Exception):
+                        self._error("claude", current)
+                        continue
+                    if current is None:
+                        self.hook_cache.pop(name, None)
+                    elif current["id"] == snapshot["id"] and expired(current):
+                        path.unlink(missing_ok=True)
+                        self.hook_cache.pop(name, None)
+                    else:
+                        self.hook_cache.pop(name, None)  # A concurrent rewrite must be read next poll.
+                    # Never unlink the lock: a waiting hook may already hold its inode open.
+            except OSError as exc:
+                self._error("claude", exc)
+
+    def _claude_registry(self):
+        """Read session identities once; completeness is independent of rendering and ledger writes."""
+        records = []
+        try:
+            files = self._files(self.claude_root / "sessions", "claude")
+        except (OSError, ValueError, TypeError) as exc:
+            self._error("claude", exc)
+            return records, False
+        complete = self.known_sources["claude"]
         for path in files:
             try:
                 data = load_json(path)
-                if data is None:  # Native session cleanup raced directory enumeration.
+                if data is None:  # A listed record vanished: no identity could be established.
+                    complete = False
                     continue
-                sid = identifier(data.get("sessionId"))
+                records.append((identifier(data.get("sessionId")), data))
+            except (OSError, ValueError, TypeError) as exc:
+                complete = False
+                self._error("claude", exc)
+        return records, complete
+
+    def claude(self):
+        """Reconcile native sessions; always clean up using independently collected identities."""
+        hooks, result = self._hooks(), []
+        records, registry_complete = self._claude_registry()
+        seen = {"claude:" + sid for sid, _ in records}
+        try:
+            for sid, data in records:
                 key = "claude:" + sid
-                seen.add(key)
-                if data.get("kind") not in {None, "interactive", "headless"}:
-                    self._forget(key)
-                    continue
-                pid, started = data.get("pid"), data.get("procStart")
-                if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
-                    raise SourceError("Invalid native PID")
-                if self.alive is pid_matches and (not isinstance(started, str) or not started):
-                    raise SourceError("Native process birth unavailable")
-                if not self.alive(pid, started):
-                    self._forget(key)
-                    continue
-                instance = str(pid) + ":" + str(started or "")
-                old_instance = self.instances.get(key) or self.results.get(key, {}).get("instance")
-                changed_instance = old_instance is not None and old_instance != instance
-                if changed_instance:
-                    self._forget(key)
-                self.instances[key] = instance
-                native_at = timestamp(data.get("statusUpdatedAt", data.get("updatedAt", 0))) / 1000
-                state = {"busy": "working", "idle": "idle", "waiting": "waiting", "needs_input": "waiting"}.get(data.get("status"), "unknown")
-                version, completed_at = "native:" + str(native_at), 0
-                hook = hooks.get(sid, {})
-                hook_at = hook.get("at", 0)
-                born = process_started_at(started)
-                instance_valid = hook_at >= born if born is not None else (not changed_instance or hook_at >= native_at)
-                if 0 <= self.clock() - hook_at < 86400 and instance_valid:
-                    if hook.get("state") == "closed" and hook_at >= native_at:
+                try:
+                    if data.get("kind") not in {None, "interactive", "headless"}:
                         self._forget(key)
                         continue
-                    if hook.get("turn"):
-                        version = hook["turn"] + ":" + str(hook.get("generation", 0))
-                    pending = hook.get("pending", {})
-                    active_pending = [item for item in pending.values() if
-                                      (state == "working" and (item["kind"] != "permission" or item["at"] >= native_at)) or
-                                      item["at"] >= native_at]
-                    terminal = hook.get("terminal")
-                    if any(item.get("ambiguous") and item["at"] >= native_at for item in pending.values()):
-                        state = "unknown"
-                    elif active_pending:
-                        state = "waiting"
-                    elif terminal and terminal["outcome"] == "failed":
-                        state = "unknown"
-                    elif state == "idle" and terminal and native_at >= hook.get("turn_started_at", 0):
-                        state, version, completed_at = "ready", terminal["version"], terminal["at"]
-                    elif hook.get("schema") != 2 and hook_at >= native_at:
-                        # Legacy hook snapshots remain readable while new hooks load.
-                        candidate = hook.get("state", state)
-                        if candidate in {"waiting", "unknown"}:
-                            state = candidate
-                        elif candidate == "ready" and state == "idle":
-                            state, version, completed_at = "ready", "legacy-stop:" + str(hook_at), hook_at
-                    elif state == "idle" and hook.get("turn_started_at", 0) > native_at and hook.get("state") == "working":
-                        state = "working"
-                result.append(self.completion("claude", sid, state, version, completed_at, instance))
-            except (OSError, ValueError, TypeError) as exc:
-                self._error("claude", exc)
-        # An invalid file may conceal an existing session; retain its ledger for recovery.
-        if "claude" not in self.errors:
-            for key in list(set(self.previous) | set(self.results) | set(self.acks)):
-                if key.startswith("claude:") and key not in seen:
-                    self._forget(key)
-        return result
+                    pid, started = data.get("pid"), data.get("procStart")
+                    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
+                        raise SourceError("Invalid native PID")
+                    if self.alive is pid_matches and (not isinstance(started, str) or not started):
+                        raise SourceError("Native process birth unavailable")
+                    if not self.alive(pid, started):
+                        self._forget(key)
+                        continue
+                    instance = str(pid) + ":" + str(started or "")
+                    old_instance = self.instances.get(key) or self.results.get(key, {}).get("instance")
+                    changed_instance = old_instance is not None and old_instance != instance
+                    if changed_instance:
+                        self._forget(key)
+                    self.instances[key] = instance
+                    native_at = timestamp(data.get("statusUpdatedAt", data.get("updatedAt", 0))) / 1000
+                    state = {"busy": "working", "idle": "idle", "waiting": "waiting", "needs_input": "waiting"}.get(data.get("status"), "unknown")
+                    version, completed_at = "native:" + str(native_at), 0
+                    hook = hooks.get(sid, {})
+                    hook_at = hook.get("at", 0)
+                    born = process_started_at(started)
+                    instance_valid = hook_at >= born if born is not None else (not changed_instance or hook_at >= native_at)
+                    if 0 <= self.clock() - hook_at < HOOK_MAX_AGE and instance_valid:
+                        if hook.get("state") == "closed" and hook_at >= native_at:
+                            self._forget(key)
+                            continue
+                        if hook.get("turn"):
+                            version = hook["turn"] + ":" + str(hook.get("generation", 0))
+                        pending = hook.get("pending", {})
+                        active_pending = [item for item in pending.values() if
+                                          (state == "working" and (item["kind"] != "permission" or item["at"] >= native_at)) or
+                                          item["at"] >= native_at]
+                        terminal = hook.get("terminal")
+                        if any(item.get("ambiguous") and item["at"] >= native_at for item in pending.values()):
+                            state = "unknown"
+                        elif active_pending:
+                            state = "waiting"
+                        elif terminal and terminal["outcome"] == "failed":
+                            state = "unknown"
+                        elif state == "idle" and terminal and native_at >= hook.get("turn_started_at", 0):
+                            state, version, completed_at = "ready", terminal["version"], terminal["at"]
+                        elif hook.get("schema") != 2 and hook_at >= native_at:
+                            # Legacy hook snapshots remain readable while new hooks load.
+                            candidate = hook.get("state", state)
+                            if candidate in {"waiting", "unknown"}:
+                                state = candidate
+                            elif candidate == "ready" and state == "idle":
+                                state, version, completed_at = "ready", "legacy-stop:" + str(hook_at), hook_at
+                        elif state == "idle" and hook.get("turn_started_at", 0) > native_at and hook.get("state") == "working":
+                            state = "working"
+                    result.append(self.completion("claude", sid, state, version, completed_at, instance))
+                except (OSError, ValueError, TypeError) as exc:
+                    self._error("claude", exc)
+            # An invalid file may conceal an existing session; retain its ledger for recovery.
+            if "claude" not in self.errors:
+                for key in list(set(self.previous) | set(self.results) | set(self.acks)):
+                    if key.startswith("claude:") and key not in seen:
+                        self._forget(key)
+            return result
+        finally:
+            self._prune_hooks(seen, registry_complete=registry_complete)
 
     def _turn_details(self, sid, path, stat, version):
         """The selected turn's details, reading only what Codex appended since the last poll when it can."""
