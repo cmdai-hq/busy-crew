@@ -78,6 +78,14 @@ class Frame:
         return bytes(component for row in self.rows for v in row
                      for component in bytes.fromhex(PALETTE[v][1:]))
 
+    def png(self):
+        """The frame as PNG bytes, for callers that control the file's permissions."""
+        import io
+        from PIL import Image
+        output = io.BytesIO()
+        Image.frombytes("RGB", (72, 16), self.rgb()).save(output, format="PNG")
+        return output.getvalue()
+
     def save(self, path, scale=1, leds=False):
         from PIL import Image, ImageDraw
         img = Image.frombytes("RGB", (72, 16), self.rgb())

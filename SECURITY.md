@@ -14,6 +14,6 @@ This small project currently supports the latest development revision; it does
 not promise a response deadline or maintain backports for older revisions.
 
 Busy Crew reads local agent metadata and sends a bitmap to the configured
-BUSY Bar. Use a device on a trusted network. With HTTP, the API key and bitmap
+BUSY Bar; [PRIVACY](docs/privacy.md) lists what it reads, keeps and sends. Use a device on a trusted network. With HTTP, the API key and bitmap
 are not protected in transit; use HTTPS when supported by the device. Runtime
 files and installation backups are private local files, not an encrypted vault.

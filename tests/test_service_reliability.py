@@ -382,10 +382,21 @@ class ServiceReliabilityTests(unittest.TestCase):
         clock = iter([0, 10])
         with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
             "agentdeck.service.time.monotonic", side_effect=lambda: next(clock, 10)
-        ), patch("agentdeck.render.Frame.save") as save:
+        ), patch("agentdeck.render.Frame.png", return_value=b"png") as png:
             self.service.run()
         self.assertEqual(self.service.device.draw.call_count, 2)
-        save.assert_called_once()
+        png.assert_called_once()
+
+    def test_frame_and_lock_files_are_private(self):
+        lock = self.service.runtime / "service.lock"
+        lock.touch(mode=0o644)  # Created by an earlier version with the default mode.
+        lock.chmod(0o644)
+        self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"):
+            self.service.run()
+        for name in ["front.png", "service.lock"]:
+            self.assertEqual((self.service.runtime / name).stat().st_mode & 0o777, 0o600, name)
+        self.assertTrue((self.service.runtime / "front.png").read_bytes().startswith(b"\x89PNG"))
 
     def test_status_publishes_health_and_identity(self):
         self.service.inputs_connected = True

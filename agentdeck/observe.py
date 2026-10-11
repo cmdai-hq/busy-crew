@@ -23,10 +23,14 @@ CODEX_DATABASES = ("state_5.sqlite", "thread_history_1.sqlite")
 # Events that change a turn's state (see rollout_details). Any other oversized record is left out.
 TURN_EVENTS = {"task_started", "turn_started", "task_complete", "turn_complete", "turn_aborted", "approval_request",
                "request_user_input", "approval_response", "user_message", "thread_status_changed"}
-# The top-level header of a Codex record, anchored at its first byte so a nested object cannot pose as it.
-RECORD_HEAD = re.compile(rb'\{\s*(?:"timestamp"\s*:\s*"[^"\\]*"\s*,\s*)?(?:"ordinal"\s*:\s*\d+\s*,\s*)?'
-                         rb'"type"\s*:\s*"([a-z_]+)"\s*,\s*"payload"\s*:\s*\{\s*"type"\s*:\s*"([a-z_]+)"\s*'
-                         rb'(?:,\s*"id"\s*:\s*"[^"\\]*"\s*)?(?:,\s*"call_id"\s*:\s*"([^"\\]{1,200})")?')
+QUESTION_TOOLS = {"request_user_input", "mcp__request_user_input"}
+# The top-level header of a Codex record, anchored at its first byte so a nested object cannot pose as it:
+# its kind, then its payload type and the call_id or tool name Codex writes before any content.
+RECORD_KIND = re.compile(rb'\{\s*(?:"timestamp"\s*:\s*"[^"\\]*"\s*,\s*)?(?:"ordinal"\s*:\s*\d+\s*,\s*)?'
+                         rb'"type"\s*:\s*"([a-z_]+)"\s*,\s*"payload"\s*:')
+PAYLOAD_HEAD = re.compile(rb'\s*\{\s*"type"\s*:\s*"([a-z_]+)"\s*(?:,\s*"id"\s*:\s*"[^"\\]*"\s*)?'
+                          rb'(?:,\s*"call_id"\s*:\s*"([^"\\]{1,200})"|,\s*"name"\s*:\s*"([^"\\]{1,200})")?')
+DECODE = object()
 
 
 class SourceError(ValueError):
@@ -126,23 +130,40 @@ def record_json(line):
     return record
 
 
-def oversized_record(head):
-    """Stand-in for a record over MAX_RECORD, or None to leave it out; fails when it could change the turn.
+def triage(head):
+    """What a Codex record needs, from its first bytes: None to leave it out, a stand-in, or DECODE.
 
-    A large tool output (a command's log, an image) must not make the whole source unreadable. A turn
-    event or a function call still must be parsed, and an output keeps its call_id: it may answer a
-    pending question. Only the record's top-level header decides; anything else fails the read.
+    Only turn events, questions and their answers change a turn's state. Messages, reasoning, tool
+    outputs and token counts are conversation content: they are left out without being decoded. A
+    record whose top-level header cannot be read is decoded, so a malformed record still fails.
     """
-    match = RECORD_HEAD.match(head[:4096])
-    if match:
-        kind, payload, call_id = match.group(1).decode(), match.group(2).decode(), match.group(3)
-        if kind == "response_item" and payload == "function_call_output" and call_id:
-            return {"type": kind, "payload": {"type": payload, "call_id": call_id.decode()}}
-        if kind == "response_item" and payload not in {"function_call", "function_call_output"}:
-            return None
-        if kind == "event_msg" and payload not in TURN_EVENTS:
-            return None
-    raise SourceError("Rollout record exceeds size limit")
+    kind = RECORD_KIND.match(head[:4096])
+    if not kind:
+        return DECODE
+    kind_name = kind.group(1).decode()
+    if kind_name not in {"event_msg", "response_item"}:
+        return None
+    payload = PAYLOAD_HEAD.match(head[:4096], kind.end())
+    if not payload:
+        return DECODE
+    payload_type, call_id, name = payload.group(1).decode(), payload.group(2), payload.group(3)
+    if kind_name == "event_msg":
+        if payload_type == "user_message":  # It ends a wait; its text is not needed.
+            return {"type": kind_name, "payload": {"type": payload_type}}
+        return DECODE if payload_type in TURN_EVENTS else None
+    if payload_type == "function_call_output":  # It may answer a question: keep its call_id only.
+        return {"type": kind_name, "payload": {"type": payload_type, "call_id": call_id.decode()}} if call_id else DECODE
+    if payload_type == "function_call":
+        return None if name and name.decode() not in QUESTION_TOOLS else DECODE
+    return None
+
+
+def oversized_record(head):
+    """Stand-in for a record over MAX_RECORD, or None to leave it out; fails when it would need decoding."""
+    outcome = triage(head)
+    if outcome is DECODE:
+        raise SourceError("Rollout record exceeds size limit")
+    return outcome
 
 
 def read_turn(path, turn_id):
@@ -179,11 +200,13 @@ def read_turn(path, turn_id):
             for line in reversed(lines):
                 if not line:
                     continue
-                if len(line) > MAX_RECORD:
-                    stand_in = oversized_record(line)
-                    if stand_in:
-                        records.append(stand_in)
+                outcome = triage(line)
+                if outcome is not DECODE:
+                    if outcome:
+                        records.append(outcome)
                     continue
+                if len(line) > MAX_RECORD:
+                    raise SourceError("Rollout record exceeds size limit")
                 record = record_json(line)
                 records.append(record)
                 payload = record.get("payload", {})
@@ -194,11 +217,13 @@ def read_turn(path, turn_id):
         if floor == 0 and (oversized or len(buffer) > MAX_RECORD):
             oversized_record(head if oversized else buffer)  # The file starts with it: never the boundary.
         elif floor == 0 and buffer:
-            record = record_json(buffer)
-            records.append(record)
-            payload = record.get("payload", {})
-            if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
-                return list(reversed(records))
+            outcome = triage(buffer)
+            record = record_json(buffer) if outcome is DECODE else outcome
+            if record:
+                records.append(record)
+                payload = record.get("payload", {})
+                if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
+                    return list(reversed(records))
     raise SourceError("Selected turn boundary unavailable")
 
 
@@ -525,7 +550,7 @@ class Observer:
                 try:
                     sid = identifier(thread["id"])
                     seen.add(sid)
-                    turn = history.execute("SELECT * FROM thread_turns WHERE thread_id=? ORDER BY rollout_ordinal DESC LIMIT 1", (sid,)).fetchone()
+                    turn = history.execute("SELECT turn_id, status, completed_at FROM thread_turns WHERE thread_id=? ORDER BY rollout_ordinal DESC LIMIT 1", (sid,)).fetchone()
                     if turn is None:
                         if "codex:" + sid in self.results:
                             raise SourceError("Previously observed turn unavailable")

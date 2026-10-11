@@ -16,7 +16,7 @@ from .health import code_fingerprint, health
 from .model import layout
 from .observe import Observer
 from .render import render, visible_sessions
-from .storage import load_json, state_dir, write_json
+from .storage import load_json, state_dir, write_bytes, write_json
 from .usage import Usage
 
 LOG = logging.getLogger("agentdeck")
@@ -222,7 +222,9 @@ class Service:
             self.command(command)
 
     def run(self):
-        lock = (self.runtime / "service.lock").open("a")
+        lock_path = self.runtime / "service.lock"
+        lock = os.fdopen(os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a")
+        lock_path.chmod(0o600)  # A lock created by an earlier version kept the default mode.
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -273,7 +275,7 @@ class Service:
                             self.presented_until = drawn_at + 15
                             last_frame, last_draw = xpm, now
                             if changed:  # A lease renewal resends the same pixels.
-                                frame.save(self.runtime / "front.png")
+                                write_bytes(self.runtime / "front.png", frame.png(), durable=False)
                         self.presented_sessions = visible_sessions(self.sessions, self.view, self.observer.errors)
                 except Exception as exc:
                     device_error = type(exc).__name__

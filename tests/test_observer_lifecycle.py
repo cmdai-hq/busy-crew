@@ -253,6 +253,30 @@ class LifecycleTests(unittest.TestCase):
         self.emit("PostToolUse", tool_use_id="first", **tool)
         self.assertEqual(self.observer.poll()[0].state, "working")
 
+    def test_permission_crossing_the_fingerprint_key_upgrade_still_clears(self):
+        import hashlib
+        self.emit("UserPromptSubmit")
+        self.now += 1
+        tool = {"tool_name": "Bash", "tool_input": {"command": "make deploy"}}
+        self.emit("PreToolUse", tool_use_id="first", **tool)
+        # The same snapshot as written by 1.0.0: unkeyed SHA-256 digests and no digest marker.
+        raw = json.dumps(["Bash", tool["tool_input"]], sort_keys=True, separators=(",", ":")).encode()
+        old = hashlib.sha256(raw).hexdigest()
+        legacy = dict(self.snapshot, calls={"tool:first": old}, pending={"permission:" + old: {"kind": "permission", "at": self.now, "ambiguous": True}})
+        legacy.pop("digest", None)
+        self.snapshot = legacy
+        self.now += 1
+        self.emit("PermissionRequest", **tool)
+        self.native()
+        # Its call cannot be identified across the upgrade: shown as unknown, never as done.
+        self.assertEqual(self.observer.poll()[0].state, "unknown")
+        self.now += 1
+        self.emit("PostToolUse", tool_use_id="first", **tool)
+        self.native()
+        self.assertEqual(self.snapshot["pending"], {})  # Before the fix a stale permission stayed here.
+        self.assertEqual(self.observer.poll()[0].state, "working")
+        self.assertEqual(self.snapshot["digest"], "hmac-sha256")
+
     def test_delayed_permission_write_after_matching_result_does_not_reopen_wait(self):
         self.emit("UserPromptSubmit")
         self.now += 1
@@ -595,6 +619,40 @@ class LifecycleTests(unittest.TestCase):
         self.observer.causes, self.observer.errors = {}, []
         self.observer._error("codex", observe.SourceError("Rollout record exceeds size limit"))
         self.assertEqual(self.observer.error_summary(), "codex (Rollout record exceeds size limit)")
+
+    def content_line(self, kind, payload_type, **head):
+        """A record whose content is not even valid JSON: reading it would fail the turn."""
+        fields = "".join(f',"{key}":"{value}"' for key, value in head.items())
+        return ('{"timestamp":"2026-10-11T10:00:00Z","ordinal":7,"type":"%s","payload":{"type":"%s"%s,'
+                '"content":[{"text":"private conversation text' % (kind, payload_type, fields))
+
+    def test_conversation_content_is_never_decoded(self):
+        self.codex_fixture([event("task_started", turn_id="turn")], "completed", self.now)
+        with self.rollout.open("a") as stream:
+            for line in [self.content_line("response_item", "message"),
+                         self.content_line("response_item", "reasoning"),
+                         self.content_line("event_msg", "agent_message"),
+                         self.content_line("response_item", "function_call", id="fc", name="shell"),
+                         self.content_line("response_item", "custom_tool_call_output", id="o", call_id="c")]:
+                stream.write(line + "\n")
+            stream.write(json.dumps(event("task_complete", turn_id="turn")) + "\n")
+        self.assertEqual(self.observer.poll()[0].state, "ready")
+        self.assertFalse(self.observer.errors)
+
+    def test_question_and_answer_are_tracked_without_reading_the_answer(self):
+        self.codex_fixture([event("task_started", turn_id="turn"),
+                            function("function_call", name="request_user_input", call_id="question")])
+        self.assertEqual(self.observer.poll()[0].state, "waiting")
+        with self.rollout.open("a") as stream:
+            stream.write(self.content_line("response_item", "function_call_output", id="o", call_id="question") + "\n")
+        self.assertEqual(self.observer.poll()[0].state, "working")
+
+    def test_user_message_ends_a_wait_without_reading_its_text(self):
+        self.codex_fixture([event("task_started", turn_id="turn"), event("approval_request", turn_id="turn")])
+        self.assertEqual(self.observer.poll()[0].state, "waiting")
+        with self.rollout.open("a") as stream:
+            stream.write(self.content_line("event_msg", "user_message") + "\n")
+        self.assertEqual(self.observer.poll()[0].state, "working")
 
     def test_unreadable_rollout_is_not_rescanned_until_it_changes(self):
         self.codex_fixture([function("function_call", name="request_user_input", call_id="q")])

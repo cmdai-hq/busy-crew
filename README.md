@@ -134,6 +134,8 @@ More, including Claude settings conflicts and recovery: [troubleshooting](docs/t
 
 Limits worth knowing: Codex approval requests are only partly visible, cloud tasks and other machines aren't tracked. Details: [how it works](docs/how-it-works.md), [tested versions](docs/COMPATIBILITY.md).
 
+**Privacy:** Busy Crew talks only to your bar: frames, display cleanup and its button events, with the bar's API key if you set one. Apart from turn events and the questions an agent asks you, conversation content is never parsed, and nothing from it is stored, logged or sent. [What is read, kept and sent](docs/privacy.md).
+
 ## Development
 
 ```sh
