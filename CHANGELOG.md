@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.2 — 2026-10-11
 
 - A Codex turn that writes more than 32 MB to its journal (a long run of tool
   calls) no longer turns the Codex family into `?` with "Selected turn boundary
