@@ -357,7 +357,7 @@ class SwiftAppTests(unittest.TestCase):
             with self.subTest(content=content):
                 self.assertEqual(self.level(content), expected)
 
-    def test_running_icon_is_a_drawn_bar_not_a_generic_symbol(self):
+    def test_running_icon_is_the_drawn_duo_not_a_generic_symbol(self):
         from PIL import Image
         icons = {}
         for level in ["ok", "stopped"]:
@@ -365,10 +365,13 @@ class SwiftAppTests(unittest.TestCase):
             result = subprocess.run([str(self.binary), "--icon", level, str(path)], capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             icons[level] = Image.open(path).convert("RGBA")
-        # 22 x 12 pt at 2x: a wide bar shape, unlike the square SF Symbols of problem states.
-        self.assertEqual(icons["ok"].size, (44, 24))
-        self.assertNotEqual(icons["stopped"].size, (44, 24))
-        self.assertIsNotNone(icons["ok"].getbbox())
+        # 16 x 16 pt at 2x, unlike the SF Symbols of problem states.
+        self.assertEqual(icons["ok"].size, (32, 32))
+        self.assertNotEqual(icons["ok"].tobytes(), icons["stopped"].tobytes())
+        alpha = icons["ok"].getchannel("A")
+        self.assertGreater(alpha.getpixel((16, 2)), 0)    # the divider between the two faces
+        self.assertGreater(alpha.getpixel((7, 16)), 0)    # Claude's left eye
+        self.assertEqual(alpha.getpixel((10, 22)), 0)     # empty face below the eyes
 
 
 if __name__ == "__main__":
