@@ -31,3 +31,33 @@ with fictional previews.
 CI tests Linux and macOS on Python 3.11, 3.14 and 3.15. Device integration and real
 LaunchAgent lifecycle checks require an explicitly chosen test device/account;
 unit tests and wheel smoke tests do not establish those results.
+
+## Releasing
+
+1. In a pull request, bump `version` in `pyproject.toml`, run `uv lock`, and
+   move the CHANGELOG's "Unreleased" notes under the new version.
+2. Merge it, then publish a GitHub release whose tag is `v` plus that version
+   (`gh release create v1.2.3 --generate-notes` or the web form).
+3. The Release workflow does the rest. It checks that the tag matches the
+   version, tests, builds and publishes to PyPI. Then it opens a pull request on
+   [cmdai-hq/homebrew-tap](https://github.com/cmdai-hq/homebrew-tap) that points
+   the formula at the new sdist and regenerates its resources from `uv.lock`.
+   That pull request merges itself once `brew test-bot` passes.
+4. Installed copies see the release within a day (see
+   [docs/privacy.md](docs/privacy.md)) and offer **Update to X** in the menu
+   bar icon.
+
+Before the first release, set up:
+
+- the `pypi` environment in this repository, with required reviewers;
+- a PyPI trusted publisher for `busy-crew`: owner `cmdai-hq`, repository
+  `busy-crew`, workflow `release.yml`, environment `pypi`;
+- a `HOMEBREW_TAP_TOKEN` secret: a fine-grained token limited to
+  `cmdai-hq/homebrew-tap`, with read and write access to contents and pull
+  requests;
+- on `cmdai-hq/homebrew-tap`: **Allow auto-merge** in the settings, and a
+  branch rule on `main` that requires the `test-bot (macos-latest)` check.
+  Without the required check, auto-merge does not wait for `brew test-bot`.
+
+Re-running a failed Release job is safe: the tap step reuses its branch and
+pull request, and stops if the tap already has the version.
