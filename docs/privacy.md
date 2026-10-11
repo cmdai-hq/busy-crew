@@ -49,7 +49,7 @@ Everything lives in a private folder (directories `0700`, data files and locks `
 | `claude-settings-*.json`, `recovery/` | Backups of your Claude settings made before installing or removing hooks |
 
 While running, the collector checks hook snapshots once an hour. It deletes
-those at least 24 hours old, and those at least an hour old whose session is
+those older than 24 hours, and those older than an hour whose session is
 absent from Claude's native registry. Unreadable snapshots are retained and
 reported as a source error; an unreadable registry prevents deletion based on
 absence. A hook currently writing is skipped until a later check. Empty lock

@@ -14,7 +14,10 @@ from agentdeck.storage import load_json, write_json
 
 
 class HookCleanupTests(unittest.TestCase):
+    """Exercise retention and concurrent writers without touching real agent state."""
+
     def setUp(self):
+        """Create private fixture roots with a controllable clock and live synthetic PIDs."""
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -26,6 +29,7 @@ class HookCleanupTests(unittest.TestCase):
                                  codex_root=self.root / "codex")
 
     def emit(self, sid, at, event="UserPromptSubmit", **extra):
+        """Run the real hook reducer and locked writer with a synthetic stdin event."""
         data = {"session_id": sid, "hook_event_name": event, **extra}
         with patch.object(hook.sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(data).encode()))), \
              patch.object(hook.time, "time", return_value=at):
@@ -33,11 +37,13 @@ class HookCleanupTests(unittest.TestCase):
         return self.runtime / "hooks" / (hashlib.sha256(sid.encode()).hexdigest() + ".json")
 
     def native(self, sid, state="busy"):
+        """Register a synthetic native session independently of its hook snapshot."""
         write_json(self.claude / "sessions" / (sid + ".json"),
                    {"sessionId": sid, "pid": 123, "status": state,
                     "statusUpdatedAt": self.now * 1000})
 
     def test_expired_snapshot_is_deleted_even_for_registered_session(self):
+        """Registration cannot preserve a hook past its maximum retention period."""
         old = self.emit("old", self.now - 86401)
         recent = self.emit("recent", self.now)
         self.native("old")
@@ -49,7 +55,8 @@ class HookCleanupTests(unittest.TestCase):
         self.assertFalse(self.observer.errors)
 
     def test_orphan_grace_preserves_recent_and_registered_snapshots(self):
-        orphan = self.emit("orphan", self.now - 3600)
+        """Only absent sessions past grace qualify before maximum retention expires."""
+        orphan = self.emit("orphan", self.now - 3601)
         recent = self.emit("recent", self.now - 3599)
         live = self.emit("live", self.now - 7200)
         future = self.emit("future", self.now + 1)
@@ -60,16 +67,23 @@ class HookCleanupTests(unittest.TestCase):
             self.assertTrue(path.exists())
         self.assertFalse(self.observer.errors)
 
-    def test_exact_expiration_matches_display_cutoff(self):
-        expired = self.emit("expired", self.now - 86400)
+    def test_cleanup_retains_snapshots_at_exact_age_boundaries(self):
+        """Cleanup requires strictly more than either retention threshold."""
+        expired = self.emit("expired", self.now - 86401)
+        boundary = self.emit("boundary", self.now - 86400)
         usable = self.emit("usable", self.now - 86399)
+        orphan_boundary = self.emit("orphan-boundary", self.now - 3600)
         self.native("expired")
+        self.native("boundary")
         self.native("usable")
         self.observer.poll()
         self.assertFalse(expired.exists())
+        self.assertTrue(boundary.exists())
         self.assertTrue(usable.exists())
+        self.assertTrue(orphan_boundary.exists())
 
     def test_cleanup_runs_only_once_an_hour(self):
+        """Intervening polls populate caches without rereading cleanup candidates."""
         self.observer.poll()
         stale = self.emit("stale", self.now - 86401)
         self.now += 3599
@@ -84,6 +98,7 @@ class HookCleanupTests(unittest.TestCase):
         self.assertNotIn(stale.name, self.observer.hook_cache)
 
     def test_busy_writer_is_skipped_without_removing_its_lock(self):
+        """A contended real flock defers deletion and keeps the writer's inode stable."""
         stale = self.emit("busy", self.now - 86401)
         lock_path = stale.with_suffix(".lock")
         inode = lock_path.stat().st_ino
@@ -103,10 +118,12 @@ class HookCleanupTests(unittest.TestCase):
         self.assertEqual(lock_path.stat().st_ino, inode)
 
     def test_snapshot_rewritten_before_lock_acquisition_is_rechecked(self):
+        """An eligible cached snapshot cannot authorize deletion of a newer write."""
         stale = self.emit("rewrite", self.now - 86401)
         flock = fcntl.flock
 
         def rewrite(lock, operation):
+            """Inject a real hook write just before cleanup acquires its lock."""
             if operation == fcntl.LOCK_EX | fcntl.LOCK_NB:
                 self.emit("rewrite", self.now, "PreToolUse", tool_name="AskUserQuestion", tool_use_id="question")
             return flock(lock, operation)
@@ -120,11 +137,13 @@ class HookCleanupTests(unittest.TestCase):
         self.assertFalse(self.observer.errors)
 
     def test_vanished_candidate_is_removed_from_cache(self):
+        """A disappearing candidate is harmless and cannot linger in the cache."""
         stale = self.emit("vanish", self.now - 86401)
         read = self.observer._hook
         calls = 0
 
         def vanish(path):
+            """Remove the candidate between its cached read and locked recheck."""
             nonlocal calls
             calls += 1
             if calls == 2:  # Initial cached read, then locked recheck.
@@ -137,6 +156,7 @@ class HookCleanupTests(unittest.TestCase):
         self.assertFalse(self.observer.errors)
 
     def test_unreadable_registry_cannot_establish_orphanhood(self):
+        """Registry corruption blocks orphan decisions but still permits age expiry."""
         orphan = self.emit("orphan", self.now - 7200)
         expired = self.emit("expired", self.now - 86401)
         sessions = self.claude / "sessions"
@@ -148,6 +168,7 @@ class HookCleanupTests(unittest.TestCase):
         self.assertEqual(self.observer.errors, ["claude"])
 
     def test_unreadable_snapshot_is_retained_and_reported(self):
+        """Snapshot corruption remains visible and never proves eligibility to delete."""
         broken = self.emit("broken", self.now - 86401)
         broken.write_text("{broken")
         self.observer.poll()
@@ -155,6 +176,7 @@ class HookCleanupTests(unittest.TestCase):
         self.assertEqual(self.observer.errors, ["claude"])
 
     def test_corrupt_hook_does_not_disable_orphan_cleanup(self):
+        """Neither fresh nor cached hook errors obscure a complete registry scan."""
         broken = self.emit("broken", self.now - 7200)
         broken.write_text("{broken")
         orphan = self.emit("orphan", self.now - 7200)
@@ -175,6 +197,7 @@ class HookCleanupTests(unittest.TestCase):
         self.assertEqual(self.observer.errors, ["claude"])
 
     def test_cleanup_failure_keeps_display_and_reports_degradation(self):
+        """Deletion failure preserves native activity and recovers on a later pass."""
         stale = self.emit("live", self.now - 86401)
         self.native("live")
         with patch.object(Path, "unlink", side_effect=PermissionError):
@@ -187,6 +210,7 @@ class HookCleanupTests(unittest.TestCase):
         self.assertFalse(self.observer.errors)
 
     def test_only_canonical_names_are_deleted(self):
+        """Unrelated filenames cannot borrow the canonical writer's per-session lock."""
         canonical = self.emit("old", self.now - 86401)
         other = canonical.with_name("unrelated.json")
         canonical.rename(other)
@@ -195,6 +219,7 @@ class HookCleanupTests(unittest.TestCase):
         self.assertFalse(self.observer.errors)
 
     def test_legacy_snapshot_uses_same_retention_and_lock(self):
+        """Legacy status snapshots expire without removing their synchronization inode."""
         legacy = self.emit("legacy", self.now - 86401)
         write_json(legacy, {"id": "legacy", "state": "ready", "at": self.now - 86401})
         self.observer.poll()
@@ -203,6 +228,7 @@ class HookCleanupTests(unittest.TestCase):
         self.assertFalse(self.observer.errors)
 
     def test_resumed_session_cannot_reuse_acknowledged_result_after_cleanup(self):
+        """Prompt and tool resumptions get fresh result identities after snapshot expiry."""
         for resume_event in ("UserPromptSubmit", "PreToolUse"):
             with self.subTest(event=resume_event):
                 sid = resume_event
@@ -213,7 +239,7 @@ class HookCleanupTests(unittest.TestCase):
                 first = next(s for s in self.observer.poll() if s.id == sid)
                 self.assertEqual(first.state, "ready")
                 self.observer.acknowledge([first])
-                self.now += 86400
+                self.now += 86401
                 self.observer.poll()
                 self.assertFalse(path.exists())
                 self.assertEqual(load_json(self.runtime / "acknowledged.json")["claude:" + sid], first.version)

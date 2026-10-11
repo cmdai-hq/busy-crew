@@ -65,8 +65,8 @@ Permission requests lack tool IDs in Claude's documented schema. The hook correl
 Hooks use isolated Python imports, store status metadata without prompts, make no approval decisions and exit with code 0. They run synchronously with a 2-second timeout and no network access.
 
 The collector checks snapshots for cleanup once an hour, starting with its first
-poll. It removes snapshots at least 24 hours old (already ignored for display),
-or at least an hour old whose session is absent from the native registry. The
+poll. It removes snapshots older than 24 hours (already ignored for display),
+or older than an hour whose session is absent from the native registry. The
 age is measured from the snapshot's last event timestamp. It rechecks each
 candidate under the hook writer's lock and skips a busy lock. Empty lock files
 are retained: deleting one could let concurrent hooks lock different inodes.

@@ -330,7 +330,10 @@ def rollout_state(records, turn_id):
 
 
 class Observer:
+    """Observe local agent activity and maintain private completion and hook state."""
+
     def __init__(self, runtime, home=None, clock=time.time, alive=pid_matches, claude_root=None, codex_root=None):
+        """Restore local result ledgers and initialize source caches and cleanup cadence."""
         self.runtime = Path(runtime)
         self.home = home or Path.home()
         self.claude_root = Path(claude_root) if claude_root is not None else claude_dir(self.home)
@@ -494,6 +497,7 @@ class Observer:
             return exc
 
     def _hooks(self):
+        """Cache validated snapshots by file identity while preserving source errors."""
         hooks = {}
         directory = self.runtime / "hooks"
         if not directory.exists():
@@ -534,8 +538,9 @@ class Observer:
         self.next_hook_cleanup = now + HOOK_CLEANUP_INTERVAL
 
         def expired(snapshot):
+            """Require elapsed retention, and a complete registry for orphan decisions."""
             age = now - snapshot["at"]
-            return age >= HOOK_MAX_AGE or (registry_complete and age >= HOOK_ORPHAN_GRACE
+            return age > HOOK_MAX_AGE or (registry_complete and age > HOOK_ORPHAN_GRACE
                                            and "claude:" + snapshot["id"] not in seen)
 
         directory = self.runtime / "hooks"
@@ -571,6 +576,7 @@ class Observer:
                 self._error("claude", exc)
 
     def claude(self):
+        """Reconcile native sessions with hooks, then prune using registry completeness."""
         hooks, result, seen = self._hooks(), [], set()
         files = self._files(self.claude_root / "sessions", "claude")
         registry_complete = True  # Hook errors cannot conceal native registry entries.
