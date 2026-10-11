@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The menu bar icon is now the duo: a rounded square split into Claude's and
+  Codex's faces. Run `busy-crew menubar install` to get it.
+
 ## 1.1.0 — 2026-10-11
 
 - Install without a checkout: `brew install cmdai-hq/tap/busy-crew` or
