@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Update to X** works on Macs whose Homebrew is managed by Workbrew: it now
+  runs `brew` through the wrapper Homebrew requires (`HOMEBREW_FORCE_BREW_WRAPPER`,
+  from the environment or `brew.env`), even with launchd's minimal `PATH`.
+- **Update to X** runs `brew update` before `brew upgrade busy-crew`, so a
+  release published minutes ago is found even when Homebrew has not refreshed
+  its taps yet. The README's manual update does the same.
+
 ## 1.1.1 — 2026-10-11
 
 - The menu bar icon is now the duo: a rounded square split into Claude's and

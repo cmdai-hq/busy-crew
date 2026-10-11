@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 from agentdeck import cli, updates
 from agentdeck.health import health
 from agentdeck.storage import write_json
-from agentdeck.updates import UpdateCheck, install_mode, parse_version, upgrade_command
+from agentdeck.updates import UpdateCheck, brew_wrapper, install_mode, parse_version, upgrade_commands
 
 from test_service_reliability import service_fixture
 
@@ -179,20 +179,38 @@ class InstallModeTests(unittest.TestCase):
         brew = self.executable(self.root / "homebrew/bin/brew")
         uv = self.executable(self.root / "home/.local/bin/uv")
         with patch.object(updates.shutil, "which", return_value=None), \
-             patch.object(updates.Path, "home", return_value=self.root / "home"):
-            self.assertEqual(upgrade_command("homebrew", self.root / "homebrew/Cellar/busy-crew/1.1.0/libexec"),
-                             [brew, "upgrade", "busy-crew"])
-            self.assertEqual(upgrade_command("uv"), [uv, "tool", "upgrade", "busy-crew"])
+             patch.object(updates.Path, "home", return_value=self.root / "home"), \
+             patch.dict(os.environ, {"HOMEBREW_FORCE_BREW_WRAPPER": ""}):
+            self.assertEqual(upgrade_commands("homebrew", self.root / "homebrew/Cellar/busy-crew/1.1.0/libexec", []),
+                             [("brew update", [brew, "update"]), ("brew upgrade", [brew, "upgrade", "busy-crew"])])
+            self.assertEqual(upgrade_commands("uv"), [("uv tool upgrade", [uv, "tool", "upgrade", "busy-crew"])])
             with self.assertRaisesRegex(RuntimeError, "Homebrew was not found"):
-                upgrade_command("homebrew", "/nonexistent/opt/busy-crew/libexec")
+                upgrade_commands("homebrew", "/nonexistent/opt/busy-crew/libexec", [])
             with self.assertRaises(ValueError):
-                upgrade_command("checkout")
+                upgrade_commands("checkout")
 
     def test_brew_on_path_wins_over_the_prefix(self):
-        wrapper = self.executable(self.root / "wrapper/brew")
+        on_path = self.executable(self.root / "elsewhere/brew")
         self.executable(self.root / "homebrew/bin/brew")
-        with patch.object(updates.shutil, "which", return_value=wrapper):
-            self.assertEqual(upgrade_command("homebrew", self.root / "homebrew/opt/busy-crew/libexec")[0], wrapper)
+        with patch.object(updates.shutil, "which", return_value=on_path), \
+             patch.dict(os.environ, {"HOMEBREW_FORCE_BREW_WRAPPER": ""}):
+            steps = upgrade_commands("homebrew", self.root / "homebrew/opt/busy-crew/libexec", [])
+        self.assertEqual({command[0] for _, command in steps}, {on_path})
+
+    def test_a_forced_brew_wrapper_wins_even_without_path(self):
+        # Workbrew: /etc/homebrew/brew.env names its wrapper, and the prefix's brew refuses to run directly.
+        wrapper = self.executable(self.root / "workbrew/bin/brew")
+        self.executable(self.root / "homebrew/bin/brew")
+        env_file = self.root / "brew.env"
+        env_file.write_text("HOMEBREW_BREW_GIT_REMOTE=https://example.invalid/brew.git\n"
+                            f"HOMEBREW_FORCE_BREW_WRAPPER={wrapper}\n")
+        with patch.object(updates.shutil, "which", return_value=None), \
+             patch.dict(os.environ, {"HOMEBREW_FORCE_BREW_WRAPPER": ""}):
+            steps = upgrade_commands("homebrew", self.root / "homebrew/opt/busy-crew/libexec",
+                                     [self.root / "missing.env", env_file])
+        self.assertEqual(steps, [("brew update", [wrapper, "update"]), ("brew upgrade", [wrapper, "upgrade", "busy-crew"])])
+        with patch.dict(os.environ, {"HOMEBREW_FORCE_BREW_WRAPPER": "/from/environment/brew"}):
+            self.assertEqual(brew_wrapper(self.root / "homebrew", [env_file]), "/from/environment/brew")
 
 
 class UpgradeTests(unittest.TestCase):
@@ -206,7 +224,8 @@ class UpgradeTests(unittest.TestCase):
         self.addCleanup(stack.close)
         stack.enter_context(patch.object(Path, "home", return_value=self.home))
         self.mode = stack.enter_context(patch.object(updates, "install_mode", return_value="homebrew"))
-        stack.enter_context(patch.object(updates, "upgrade_command", return_value=["/fake/brew", "upgrade", "busy-crew"]))
+        stack.enter_context(patch.object(updates, "upgrade_commands", return_value=[
+            ("brew update", ["/fake/brew", "update"]), ("brew upgrade", ["/fake/brew", "upgrade", "busy-crew"])]))
         stack.enter_context(patch("agentdeck.install.interpreter", return_value=PYTHON))
         self.run = stack.enter_context(patch.object(updates.subprocess, "run",
                                                     return_value=subprocess.CompletedProcess([], 0)))
@@ -217,7 +236,7 @@ class UpgradeTests(unittest.TestCase):
 
     def test_upgrades_then_reinstalls_with_the_new_version(self):
         self.assertEqual(updates.upgrade(self.runtime), "homebrew")
-        self.assertEqual(self.commands(), [["/fake/brew", "upgrade", "busy-crew"],
+        self.assertEqual(self.commands(), [["/fake/brew", "update"], ["/fake/brew", "upgrade", "busy-crew"],
                                            [PYTHON, "-I", "-m", "agentdeck.cli", "install", "--python", PYTHON]])
         self.popen.assert_not_called()  # No menu bar app installed.
         log = self.runtime / "upgrade.log"
@@ -231,14 +250,14 @@ class UpgradeTests(unittest.TestCase):
         plist.write_bytes(plistlib.dumps({"Label": "local.busybar.agent-deck",
                                           "ProgramArguments": ["/chosen/python", "-I", "-m", "agentdeck.cli", "run"]}))
         updates.upgrade(self.runtime)
-        self.assertEqual(self.commands()[1], ["/chosen/python", "-I", "-m", "agentdeck.cli", "install",
+        self.assertEqual(self.commands()[-1], ["/chosen/python", "-I", "-m", "agentdeck.cli", "install",
                                               "--python", "/chosen/python"])
 
     def test_passive_installation_stays_passive(self):
         write_json(self.runtime / "installation.json",
                    {"version": 1, "hook_settings": str(self.home / ".claude/settings.json"), "hook_commands": []})
         updates.upgrade(self.runtime)
-        self.assertEqual(self.commands()[1][-1], "--no-claude-hooks")
+        self.assertEqual(self.commands()[-1][-1], "--no-claude-hooks")
 
     def test_menu_bar_app_is_reinstalled_detached_from_itself(self):
         plist = self.home / "Library/LaunchAgents/local.busybar.agent-deck.menubar.plist"
@@ -250,7 +269,7 @@ class UpgradeTests(unittest.TestCase):
 
     def test_failed_package_upgrade_leaves_the_installation_alone(self):
         self.run.return_value = subprocess.CompletedProcess([], 1)
-        with self.assertRaisesRegex(RuntimeError, "brew upgrade failed; see .*upgrade.log"):
+        with self.assertRaisesRegex(RuntimeError, "brew update failed; see .*upgrade.log"):
             updates.upgrade(self.runtime)
         self.assertEqual(len(self.commands()), 1)
         self.popen.assert_not_called()
