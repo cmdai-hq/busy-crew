@@ -116,25 +116,40 @@ def install_mode(prefix=None, package=None):
 def brew_wrapper(homebrew_prefix, env_files=None):
     """The wrapper Homebrew insists on being run through (Workbrew's, for one), if any.
 
-    Homebrew reads HOMEBREW_FORCE_BREW_WRAPPER from the environment or from its brew.env files,
-    and refuses to run when invoked another way.
+    HOMEBREW_FORCE_BREW_WRAPPER is resolved the way Homebrew's bin/brew does it: the environment,
+    then /etc/homebrew/brew.env, the prefix's and the user's brew.env, each overriding the previous,
+    and /etc's again last when HOMEBREW_SYSTEM_ENV_TAKES_PRIORITY is set. `env_files` replaces the
+    (system, prefix, user) paths in tests.
     """
-    if os.environ.get("HOMEBREW_FORCE_BREW_WRAPPER"):
-        return os.environ["HOMEBREW_FORCE_BREW_WRAPPER"]
-    if env_files is None:
-        env_files = [Path("/etc/homebrew/brew.env"), Path(homebrew_prefix) / "etc/homebrew/brew.env",
-                     Path.home() / ".homebrew/brew.env"]
-    for path in env_files:
+    keys = ("HOMEBREW_FORCE_BREW_WRAPPER", "HOMEBREW_SYSTEM_ENV_TAKES_PRIORITY")
+    settings = {key: os.environ[key] for key in keys if key in os.environ}
+
+    def load(path):
         try:
             lines = Path(path).read_text().splitlines()
         except (OSError, UnicodeError):
-            continue
+            return
         for line in lines:
             key, separator, value = line.strip().partition("=")
-            value = value.strip().strip("\"'")
-            if separator and key == "HOMEBREW_FORCE_BREW_WRAPPER" and value:
-                return value
-    return None
+            if separator and key in keys:
+                settings[key] = value
+
+    if env_files is None:
+        if os.environ.get("XDG_CONFIG_HOME"):
+            user = Path(os.environ["XDG_CONFIG_HOME"]) / "homebrew"
+        elif os.environ.get("HOMEBREW_XDG_CONFIG_HOME"):
+            user = Path(os.environ["HOMEBREW_XDG_CONFIG_HOME"]) / "homebrew"
+        else:
+            user = Path.home() / ".homebrew"
+        env_files = (Path("/etc/homebrew/brew.env"), Path(homebrew_prefix) / "etc/homebrew/brew.env", user / "brew.env")
+    system, prefix, user_file = env_files
+    load(system)
+    system_first = bool(settings.get("HOMEBREW_SYSTEM_ENV_TAKES_PRIORITY"))
+    load(prefix)
+    load(user_file)
+    if system_first:
+        load(system)
+    return settings.get("HOMEBREW_FORCE_BREW_WRAPPER") or None
 
 
 def upgrade_commands(mode, prefix=None, env_files=None):

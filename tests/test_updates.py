@@ -181,11 +181,11 @@ class InstallModeTests(unittest.TestCase):
         with patch.object(updates.shutil, "which", return_value=None), \
              patch.object(updates.Path, "home", return_value=self.root / "home"), \
              patch.dict(os.environ, {"HOMEBREW_FORCE_BREW_WRAPPER": ""}):
-            self.assertEqual(upgrade_commands("homebrew", self.root / "homebrew/Cellar/busy-crew/1.1.0/libexec", []),
+            self.assertEqual(upgrade_commands("homebrew", self.root / "homebrew/Cellar/busy-crew/1.1.0/libexec", self.no_env_files),
                              [("brew update", [brew, "update"]), ("brew upgrade", [brew, "upgrade", "busy-crew"])])
             self.assertEqual(upgrade_commands("uv"), [("uv tool upgrade", [uv, "tool", "upgrade", "busy-crew"])])
             with self.assertRaisesRegex(RuntimeError, "Homebrew was not found"):
-                upgrade_commands("homebrew", "/nonexistent/opt/busy-crew/libexec", [])
+                upgrade_commands("homebrew", "/nonexistent/opt/busy-crew/libexec", self.no_env_files)
             with self.assertRaises(ValueError):
                 upgrade_commands("checkout")
 
@@ -194,23 +194,40 @@ class InstallModeTests(unittest.TestCase):
         self.executable(self.root / "homebrew/bin/brew")
         with patch.object(updates.shutil, "which", return_value=on_path), \
              patch.dict(os.environ, {"HOMEBREW_FORCE_BREW_WRAPPER": ""}):
-            steps = upgrade_commands("homebrew", self.root / "homebrew/opt/busy-crew/libexec", [])
+            steps = upgrade_commands("homebrew", self.root / "homebrew/opt/busy-crew/libexec", self.no_env_files)
         self.assertEqual({command[0] for _, command in steps}, {on_path})
+
+    @property
+    def no_env_files(self):
+        missing = self.root / "missing.env"
+        return (missing, missing, missing)
 
     def test_a_forced_brew_wrapper_wins_even_without_path(self):
         # Workbrew: /etc/homebrew/brew.env names its wrapper, and the prefix's brew refuses to run directly.
         wrapper = self.executable(self.root / "workbrew/bin/brew")
         self.executable(self.root / "homebrew/bin/brew")
-        env_file = self.root / "brew.env"
-        env_file.write_text("HOMEBREW_BREW_GIT_REMOTE=https://example.invalid/brew.git\n"
-                            f"HOMEBREW_FORCE_BREW_WRAPPER={wrapper}\n")
+        system = self.root / "system.env"
+        system.write_text("HOMEBREW_BREW_GIT_REMOTE=https://example.invalid/brew.git\n"
+                          f"HOMEBREW_FORCE_BREW_WRAPPER={wrapper}\n")
+        missing = self.root / "missing.env"
         with patch.object(updates.shutil, "which", return_value=None), \
-             patch.dict(os.environ, {"HOMEBREW_FORCE_BREW_WRAPPER": ""}):
-            steps = upgrade_commands("homebrew", self.root / "homebrew/opt/busy-crew/libexec",
-                                     [self.root / "missing.env", env_file])
+             patch.dict(os.environ, {"HOMEBREW_FORCE_BREW_WRAPPER": "/stale/inherited/brew"}):
+            steps = upgrade_commands("homebrew", self.root / "homebrew/opt/busy-crew/libexec", (system, missing, missing))
         self.assertEqual(steps, [("brew update", [wrapper, "update"]), ("brew upgrade", [wrapper, "upgrade", "busy-crew"])])
-        with patch.dict(os.environ, {"HOMEBREW_FORCE_BREW_WRAPPER": "/from/environment/brew"}):
-            self.assertEqual(brew_wrapper(self.root / "homebrew", [env_file]), "/from/environment/brew")
+
+    def test_wrapper_follows_homebrews_precedence(self):
+        system, prefix, user = (self.root / name for name in ("system.env", "prefix.env", "user.env"))
+        system.write_text("HOMEBREW_FORCE_BREW_WRAPPER=/system/brew\n")
+        prefix.write_text("HOMEBREW_FORCE_BREW_WRAPPER=/prefix/brew\n")
+        missing = self.root / "missing.env"
+        with patch.dict(os.environ, {"HOMEBREW_FORCE_BREW_WRAPPER": "/environment/brew"}):
+            self.assertEqual(brew_wrapper(self.root, (missing, missing, missing)), "/environment/brew")
+            self.assertEqual(brew_wrapper(self.root, (system, missing, missing)), "/system/brew")
+            self.assertEqual(brew_wrapper(self.root, (system, prefix, missing)), "/prefix/brew")
+            user.write_text("HOMEBREW_FORCE_BREW_WRAPPER=/user/brew\n")
+            self.assertEqual(brew_wrapper(self.root, (system, prefix, user)), "/user/brew")
+            system.write_text("HOMEBREW_SYSTEM_ENV_TAKES_PRIORITY=1\nHOMEBREW_FORCE_BREW_WRAPPER=/system/brew\n")
+            self.assertEqual(brew_wrapper(self.root, (system, prefix, user)), "/system/brew")
 
 
 class UpgradeTests(unittest.TestCase):
