@@ -145,6 +145,70 @@ class InstallationTests(unittest.TestCase):
         self.assertIn("echo python -m agentdeck.hook", [handler["command"] for handler in handlers])
         self.assertIn(installer.hook_command(), [handler["command"] for handler in handlers])
 
+    def homebrew_python(self, version="1.1.0", linked=True):
+        prefix = self.home / "homebrew"
+        python = prefix / "Cellar/busy-crew" / version / "libexec/bin/python"
+        python.parent.mkdir(parents=True)
+        python.touch(mode=0o755)
+        if linked:
+            (prefix / "opt").mkdir()
+            (prefix / "opt/busy-crew").symlink_to(python.parents[2])
+        return python, prefix / "opt/busy-crew/libexec/bin/python"
+
+    def test_homebrew_cellar_interpreter_becomes_its_opt_link(self):
+        cellar, stable = self.homebrew_python()
+        with patch.object(installer.sys, "executable", str(cellar)):
+            self.assertEqual(installer.interpreter(), str(stable))
+
+    def test_cellar_interpreter_without_opt_link_is_kept(self):
+        cellar, _ = self.homebrew_python(linked=False)
+        for executable in [str(cellar), str(self.home / "checkout/.venv/bin/python"), "/opt/homebrew/Cellar/python"]:
+            with self.subTest(executable=executable), patch.object(installer.sys, "executable", executable):
+                self.assertEqual(installer.interpreter(), executable)
+
+    def test_interpreter_option_wins_over_variable_over_default(self):
+        cellar, stable = self.homebrew_python()
+        option, variable = str(self.home / "option/python"), str(self.home / "variable/python")
+        with patch.object(installer.sys, "executable", str(cellar)):
+            self.assertEqual(installer.interpreter(), str(stable))
+            with patch.dict(os.environ, {"BUSY_CREW_PYTHON": variable}):
+                self.assertEqual(installer.interpreter(), variable)
+                self.assertEqual(installer.interpreter(option), option)
+            # An option or variable is used as given, without the Homebrew rewrite.
+            self.assertEqual(installer.interpreter(str(cellar)), str(cellar))
+
+    def test_install_pins_the_stable_interpreter_everywhere(self):
+        cellar, stable = self.homebrew_python()
+        with patch.object(installer.sys, "executable", str(cellar)):
+            installer.install("http://fictional-device", "UTC")
+        expected = installer.hook_command(python=str(stable))
+        self.assertEqual(shlex.split(expected)[0], str(stable))
+        self.assertEqual(plistlib.loads(installer.launch_agent_path().read_bytes())["ProgramArguments"][0], str(stable))
+        commands = {handler["command"] for groups in load_json(self.settings)["hooks"].values()
+                    for group in groups for handler in group["hooks"]}
+        self.assertEqual(commands, {expected})
+        self.assertEqual(load_json(self.runtime / installer.MANIFEST)["hook_commands"], [expected])
+        self.assertNotIn(str(cellar), self.settings.read_text())
+
+    def test_reinstall_with_the_same_interpreter_rewrites_nothing(self):
+        self.initial_settings()
+        installer.install("http://fictional-device", "UTC", python="/fictional/python")
+        before = self.state_bytes()
+        backups = sorted((self.runtime / "recovery").iterdir())
+        installer.install(python="/fictional/python")
+        self.assertEqual(self.state_bytes(), before)
+        self.assertEqual(sorted((self.runtime / "recovery").iterdir()), backups)
+
+    def test_reinstall_with_another_interpreter_replaces_its_hooks(self):
+        original = self.initial_settings()
+        installer.install("http://fictional-device", "UTC", python="/checkout/.venv/bin/python")
+        installer.install(python="/opt/homebrew/opt/busy-crew/libexec/bin/python")
+        settings = self.settings.read_text()
+        self.assertNotIn("/checkout/", settings)
+        self.assertEqual(settings.count("/opt/homebrew/opt/busy-crew/libexec/bin/python"), len(installer.EVENTS))
+        installer.uninstall()
+        self.assertEqual(load_json(self.settings), original)
+
     def test_symlink_valid_and_broken_are_refused_before_any_config_mutation(self):
         for broken in [False, True]:
             with self.subTest(broken=broken):
@@ -407,12 +471,38 @@ class StorageAndPreflightTests(unittest.TestCase):
             state.assert_not_called()
 
     def test_preflight_import_failure_is_before_any_configuration_mutation(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        python = Path(temp.name) / "python"
+        python.touch(mode=0o755)
         with patch.object(installer.sys, "platform", "darwin"), patch.object(installer.shutil, "which", return_value="launchctl"), \
-             patch.object(installer.subprocess, "run", side_effect=subprocess.CalledProcessError(1, ["fake-python"])), \
+             patch.object(installer.subprocess, "run", side_effect=subprocess.CalledProcessError(1, ["fake-python"])) as run, \
              patch.object(installer, "state_dir") as state:
-            with self.assertRaises(subprocess.CalledProcessError):
-                installer.install()
+            with self.assertRaisesRegex(RuntimeError, "not installed for this Python"):
+                installer.install(python=str(python))
             state.assert_not_called()
+            self.assertEqual(run.call_args.args[0][0], str(python))
+
+    def test_menubar_refuses_an_interpreter_without_busy_crew_before_compiling(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        python = Path(temp.name) / "python"
+        python.touch(mode=0o755)
+        with patch.object(installer.sys, "platform", "darwin"), patch.object(installer.shutil, "which", return_value="launchctl"), \
+             patch.object(installer.subprocess, "run", side_effect=subprocess.CalledProcessError(1, ["fake-python"])) as run, \
+             patch.object(installer, "state_dir") as state:
+            with self.assertRaisesRegex(RuntimeError, "not installed for this Python"):
+                installer.install_menubar(str(python))
+            state.assert_not_called()
+            self.assertEqual(run.call_count, 1)
+
+    def test_preflight_refuses_a_missing_interpreter_before_any_configuration_mutation(self):
+        with patch.object(installer.sys, "platform", "darwin"), patch.object(installer.shutil, "which", return_value="launchctl"), \
+             patch.object(installer.subprocess, "run") as run, patch.object(installer, "state_dir") as state:
+            with self.assertRaisesRegex(RuntimeError, "interpreter is unavailable"):
+                installer.install(python="/fictional/missing/python")
+            state.assert_not_called()
+            run.assert_not_called()
 
     def test_address_rejects_credentials_redirect_paths_and_bad_ports(self):
         for address in ["file:///tmp/device", "http://user:pass@device", "http://device/api", "http://device:bad", "http://device/?token=x"]:
