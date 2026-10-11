@@ -483,6 +483,19 @@ class StorageAndPreflightTests(unittest.TestCase):
             state.assert_not_called()
             self.assertEqual(run.call_args.args[0][0], str(python))
 
+    def test_menubar_refuses_an_interpreter_without_busy_crew_before_compiling(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        python = Path(temp.name) / "python"
+        python.touch(mode=0o755)
+        with patch.object(installer.sys, "platform", "darwin"), patch.object(installer.shutil, "which", return_value="launchctl"), \
+             patch.object(installer.subprocess, "run", side_effect=subprocess.CalledProcessError(1, ["fake-python"])) as run, \
+             patch.object(installer, "state_dir") as state:
+            with self.assertRaisesRegex(RuntimeError, "not installed for this Python"):
+                installer.install_menubar(str(python))
+            state.assert_not_called()
+            self.assertEqual(run.call_count, 1)
+
     def test_preflight_refuses_a_missing_interpreter_before_any_configuration_mutation(self):
         with patch.object(installer.sys, "platform", "darwin"), patch.object(installer.shutil, "which", return_value="launchctl"), \
              patch.object(installer.subprocess, "run") as run, patch.object(installer, "state_dir") as state:

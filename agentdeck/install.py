@@ -550,7 +550,7 @@ def _swift_compiler():
 def install_menubar(python=None):
     """Compile the optional menu bar app, then swap it in with its own LaunchAgent."""
     python = interpreter(python)
-    launchctl = _preflight(None, None, python, imports=False)
+    launchctl = _preflight(None, None, python)  # The app's actions run `python -m agentdeck.cli`.
     xcrun = _swift_compiler()
     runtime = state_dir()
     build = Path(tempfile.mkdtemp(prefix=".menubar-build-", dir=runtime))
