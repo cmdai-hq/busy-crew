@@ -619,6 +619,18 @@ class PaceTests(unittest.TestCase):
         self.assertLessEqual(first - 31.3, WATCH_INTERVAL)
         self.assertEqual(set(gaps([t for t in self.polls if t >= first])), {ACTIVE_INTERVAL})
 
+    def test_claude_write_during_a_poll_is_picked_up_within_a_second(self):
+        native, written = self.runtime / "claude" / "sessions" / "1.json", []
+
+        def states(now):
+            if now >= 30 and not written:  # Claude writes while the collector is busy with this poll.
+                written.append(now)
+                native.write_text("{}")
+            return ["idle"]
+
+        self.simulate(states, until=45)
+        self.assertLessEqual(next(t for t in self.polls if t > written[0]) - written[0], WATCH_INTERVAL)
+
     def test_button_wakes_the_collector_at_once_without_breaking_the_lease(self):
         self.simulate(lambda now: ["idle"], until=60, arrivals=[(33.7, lambda: self.service.enqueue("next"))])
         self.assertIn(33.7, self.polls)

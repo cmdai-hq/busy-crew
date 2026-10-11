@@ -258,9 +258,11 @@ class Service:
             marks.append(None)
         return marks
 
-    def rest(self, due, inbox):
-        """Wait until `due` (monotonic), or less when a button, a command or a Claude file arrives."""
-        watched = self.news(inbox)
+    def rest(self, due, inbox, watched):
+        """Wait until `due` (monotonic), or less when a button, a command or a Claude file arrives.
+
+        `watched` is what `news` returned before the poll: a write during the poll counts as news.
+        """
         while not self.stop.is_set():
             remaining = due - time.monotonic()
             if remaining <= 0:
@@ -298,6 +300,7 @@ class Service:
             fingerprint = self._fingerprint()
             while not self.stop.is_set():
                 now = time.monotonic()
+                watched = self.news(inbox)
                 self.read_commands(inbox)
                 self.sessions = self.observer.poll()
                 usage = self.usage.snapshot()
@@ -362,7 +365,7 @@ class Service:
                 due = now + pace(self.sessions, now, changed_at)
                 if last_frame is not None:  # Displayed: renew the lease on time even at rest.
                     due = min(due, last_draw + LEASE_RENEWAL)
-                self.rest(due, inbox)
+                self.rest(due, inbox, watched)
         finally:
             self.stop.set()
             self.presented_sessions = []
