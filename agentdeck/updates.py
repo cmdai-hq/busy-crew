@@ -113,25 +113,67 @@ def install_mode(prefix=None, package=None):
     return None
 
 
-def upgrade_command(mode, prefix=None):
-    """`brew upgrade busy-crew` or `uv tool upgrade busy-crew`, with the tool found outside PATH too.
+def brew_wrapper(homebrew_prefix, env_files=None):
+    """The wrapper Homebrew insists on being run through (Workbrew's, for one), if any.
 
-    The menu bar app runs this with launchd's minimal PATH.
+    HOMEBREW_FORCE_BREW_WRAPPER is resolved the way Homebrew's bin/brew does it: the environment,
+    then /etc/homebrew/brew.env, the prefix's and the user's brew.env, each overriding the previous,
+    and /etc's again last when HOMEBREW_SYSTEM_ENV_TAKES_PRIORITY is set. `env_files` replaces the
+    (system, prefix, user) paths in tests.
+    """
+    keys = ("HOMEBREW_FORCE_BREW_WRAPPER", "HOMEBREW_SYSTEM_ENV_TAKES_PRIORITY")
+    settings = {key: os.environ[key] for key in keys if key in os.environ}
+
+    def load(path):
+        try:
+            lines = Path(path).read_text().splitlines()
+        except (OSError, UnicodeError):
+            return
+        for line in lines:
+            key, separator, value = line.strip().partition("=")
+            if separator and key in keys:
+                settings[key] = value
+
+    if env_files is None:
+        if os.environ.get("XDG_CONFIG_HOME"):
+            user = Path(os.environ["XDG_CONFIG_HOME"]) / "homebrew"
+        elif os.environ.get("HOMEBREW_XDG_CONFIG_HOME"):
+            user = Path(os.environ["HOMEBREW_XDG_CONFIG_HOME"]) / "homebrew"
+        else:
+            user = Path.home() / ".homebrew"
+        env_files = (Path("/etc/homebrew/brew.env"), Path(homebrew_prefix) / "etc/homebrew/brew.env", user / "brew.env")
+    system, prefix, user_file = env_files
+    load(system)
+    system_first = bool(settings.get("HOMEBREW_SYSTEM_ENV_TAKES_PRIORITY"))
+    load(prefix)
+    load(user_file)
+    if system_first:
+        load(system)
+    return settings.get("HOMEBREW_FORCE_BREW_WRAPPER") or None
+
+
+def upgrade_commands(mode, prefix=None, env_files=None):
+    """The (name, command) steps that upgrade the package, with the tool found outside PATH too.
+
+    The menu bar app runs them with launchd's minimal PATH. Homebrew first refreshes its taps:
+    it may otherwise not see a formula published minutes ago.
     """
     if mode == "homebrew":
         parts = Path(prefix or sys.prefix).parts
         keg = next(i for i, pair in enumerate(zip(parts, parts[1:]))
                    if pair[0] in {"Cellar", "opt"} and pair[1] == "busy-crew")
-        candidates, arguments = [shutil.which("brew"), str(Path(*parts[:keg], "bin", "brew"))], ["upgrade", "busy-crew"]
+        homebrew_prefix = Path(*parts[:keg])
+        candidates = [brew_wrapper(homebrew_prefix, env_files), shutil.which("brew"), str(homebrew_prefix / "bin" / "brew")]
+        steps = [("brew update", ["update"]), ("brew upgrade", ["upgrade", "busy-crew"])]
     elif mode == "uv":
         candidates = [shutil.which("uv"), str(Path.home() / ".local/bin/uv"), "/opt/homebrew/bin/uv", "/usr/local/bin/uv"]
-        arguments = ["tool", "upgrade", "busy-crew"]
+        steps = [("uv tool upgrade", ["tool", "upgrade", "busy-crew"])]
     else:
         raise ValueError(f"No package manager for installation mode {mode}")
     tool = next((path for path in candidates if path and os.path.isfile(path) and os.access(path, os.X_OK)), None)
     if tool is None:
         raise RuntimeError(("Homebrew" if mode == "homebrew" else "uv") + " was not found")
-    return [tool, *arguments]
+    return [(name, [tool, *arguments]) for name, arguments in steps]
 
 
 def upgrade(runtime):
@@ -144,7 +186,7 @@ def upgrade(runtime):
                            "then `uv run busy-crew install`")
     if mode is None:
         raise RuntimeError("Upgrade Busy Crew with the tool that installed it, then run `busy-crew install`")
-    command = upgrade_command(mode)
+    commands = upgrade_commands(mode)
     with (runtime / "upgrade.lock").open("a") as lock:
         os.chmod(lock.name, 0o600)
         try:
@@ -162,8 +204,7 @@ def upgrade(runtime):
             install.append("--no-claude-hooks")  # Keep a passive installation passive.
         log_path = runtime / "upgrade.log"
         with open(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as log:
-            name = "brew upgrade" if mode == "homebrew" else "uv tool upgrade"
-            for name, step in ((name, command), ("busy-crew install", install)):
+            for name, step in [*commands, ("busy-crew install", install)]:
                 print("$ " + " ".join(step), file=log, flush=True)
                 result = subprocess.run(step, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                         timeout=1800)
