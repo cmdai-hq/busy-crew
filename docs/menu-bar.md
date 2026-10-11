@@ -35,6 +35,4 @@ The menu shows:
 
 The icon is cheap to run: it reads the 1.5 KB `status.json` every 5 seconds and when you open the menu. It never reads Claude or Codex data and never contacts the bar.
 
-After updating Busy Crew:
-- **Reload collector** picks up Python changes. In a checkout, run `uv sync --locked` first if dependencies changed.
-- If the Swift app changed, re-run `busy-crew menubar install`.
+After updating Busy Crew, run `busy-crew install` (it restarts the collector) and `busy-crew menubar install`. In a checkout, **Reload collector** is enough for Python-only changes; run `uv sync --locked` first if dependencies changed.
