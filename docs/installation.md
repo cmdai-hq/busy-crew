@@ -79,7 +79,9 @@ ccusage --version
 command -v ccusage
 ```
 
-Set `ccusage` in `config.json` to the absolute path printed by the last command, then reload the collector. Its Node.js or Bun runtime must also be available in the collector's PATH, captured during `install`.
+Set `ccusage` in `config.json` to the absolute path printed by the last command, then reload the collector.
+
+Its Node.js or Bun runtime must also be in the collector's PATH, captured during `install`. If you installed the runtime later or changed its location, rerun `busy-crew install` from a terminal where `ccusage --version` works. This refreshes PATH and restarts the collector; add `--no-claude-hooks` for passive tracking.
 
 Use an executable path, not `npx ccusage@latest` or `bunx ccusage`. Busy Crew adds the report arguments itself and runs ccusage offline. Run `busy-crew refresh` to start a recount; a report can take up to 45 seconds.
 
