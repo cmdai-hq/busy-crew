@@ -10,7 +10,7 @@ let pollInterval: TimeInterval = 5
 let levels: Set<String> = ["degraded", "update", "paused", "ok"]
 let levelTitles = ["stopped": "Stopped", "degraded": "Degraded", "update": "Update available",
                    "paused": "Paused", "ok": "Running"]
-// Problems change the icon's shape so they stand out; "ok" is the drawn bar below.
+// Problems change the icon's shape so they stand out; "ok" is the drawn duo below.
 let levelSymbols = ["stopped": "xmark.circle", "degraded": "exclamationmark.triangle",
                     "update": "arrow.clockwise.circle", "paused": "pause.circle"]
 let stateOrder: [(state: String, label: String)] = [("waiting", "waiting"), ("working", "working"),
@@ -153,18 +153,21 @@ func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date, updating: 
     return entries
 }
 
-/// The BUSY Bar in outline with two rows of LEDs: recognizable at menu bar size.
-func barImage() -> NSImage {
-    let image = NSImage(size: NSSize(width: 22, height: 12), flipped: false) { rect in
+/// Busy Crew's mark, the duo: a rounded square split into Claude's and Codex's faces, two eyes each.
+/// The site draws the same shape (busy-crew-landing's MenuIcon.astro).
+func duoImage() -> NSImage {
+    let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
         NSColor.black.set()
-        let body = NSBezierPath(roundedRect: rect.insetBy(dx: 0.65, dy: 0.65), xRadius: 3, yRadius: 3)
+        let body = NSBezierPath(roundedRect: rect.insetBy(dx: 0.65, dy: 0.65), xRadius: 3.6, yRadius: 3.6)
         body.lineWidth = 1.3  // Matches SF Symbols' regular stroke.
         body.stroke()
-        for row in 0..<2 {
-            for column in 0..<6 {
-                let led = NSRect(x: 3.4 + Double(column) * 2.75, y: 3.1 + Double(row) * 3.2, width: 1.8, height: 1.8)
-                NSBezierPath(ovalIn: led).fill()
-            }
+        let divider = NSBezierPath()
+        divider.move(to: NSPoint(x: 8, y: 0.65))
+        divider.line(to: NSPoint(x: 8, y: 15.35))
+        divider.lineWidth = 1.3
+        divider.stroke()
+        for x in [2.75, 4.75, 10.05, 12.05] {
+            NSBezierPath(roundedRect: NSRect(x: x, y: 6.4, width: 1.2, height: 3.2), xRadius: 0.6, yRadius: 0.6).fill()
         }
         return true
     }
@@ -173,7 +176,7 @@ func barImage() -> NSImage {
 }
 
 func icon(for level: String) -> NSImage? {
-    if level == "ok" { return barImage() }
+    if level == "ok" { return duoImage() }
     let image = NSImage(systemSymbolName: levelSymbols[level] ?? "questionmark.circle", accessibilityDescription: nil)
     image?.isTemplate = true
     return image

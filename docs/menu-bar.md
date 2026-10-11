@@ -20,7 +20,7 @@ busy-crew menubar uninstall
 | `exclamationmark.triangle` | Degraded: the bar is unreachable, a source cannot be read, or the bar's buttons are disconnected |
 | `arrow.clockwise.circle` | Update available: a newer release is out, the collector's code changed on disk since it started, or the running collector predates health reporting |
 | `pause.circle` | Paused by the bar's selector |
-| The bar in outline with its LEDs | Running |
+| The duo: a square split into two faces with two eyes each | Running |
 
 The menu shows:
 - the reasons and the start time;
