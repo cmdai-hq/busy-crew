@@ -67,7 +67,7 @@ uv run busy-crew install --address http://busybar.local --timezone Europe/Paris
 <details>
 <summary>What <code>install</code> changes on your Mac</summary>
 
-- **A LaunchAgent** (`local.busybar.agent-deck`) starts the collector at login and restarts it if it exits. It runs the Python that ran `install`. From a checkout, that is the checkout's environment, so **keep the repository folder where it is**. From a Homebrew package, it is the formula's `opt` path, which survives upgrades. `--python` or `BUSY_CREW_PYTHON` picks another interpreter.
+- **A LaunchAgent** (`local.busybar.agent-deck`) starts the collector at login and restarts it if it exits. It runs the interpreter given to `install` with `--python` or `BUSY_CREW_PYTHON`, else the Python that ran `install`. From a checkout, that is the checkout's environment, so **keep the repository folder where it is**. From a Homebrew package, it is the formula's `opt` path, which survives upgrades.
 - **Claude Code hooks**, added to Claude's settings after a private backup. They record only status identifiers and timestamps, never prompts, and never block Claude. Existing hooks and settings are preserved; a conflicting edit fails with recovery copies. Use `--no-claude-hooks` to rely on Claude's session registry alone, with coarser waiting and result detection.
 - **A private state folder**, `~/Library/Application Support/BusyCrew`, for the configuration, backups and the log. Installations made before 1.0 keep `BusybarAgentDeck`.
 
@@ -99,7 +99,7 @@ A `✓` counts toward its family's total until you acknowledge it, the session s
 
 ### Menu bar icon
 
-Optional. When the bar goes dark, the icon in your macOS menu bar says why: running, paused by the selector, degraded, stopped, or waiting for a reload after an update. Its menu shows each family's sessions and today's tokens, and lets you acknowledge results, recount tokens, reload the collector or open the log.
+Optional. When the bar goes dark, the icon in your macOS menu bar says why: running, paused by the selector, degraded, stopped, or waiting for a reload after an update. Its menu shows each family's sessions and today's tokens, and lets you acknowledge results, recount tokens, reload the collector, open the log, or install a new release.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/cmdai-hq/busy-crew/main/docs/menu-bar.png" width="540" alt="Busy Crew's menu, open from the macOS menu bar: Running, started 6 minutes ago; Claude 1 working, 2 done, 1 idle; Codex 3 working, 1 done; today's tokens; Acknowledge results, Refresh tokens now, Reload collector, Open log, Quit menu icon">
@@ -121,6 +121,7 @@ busy-crew menubar install   # needs the Swift compiler: xcode-select --install
 | `timezone` | Time zone for "today" and "this month" |
 | `ccusage` | Absolute path to `ccusage`, if the LaunchAgent cannot find it |
 | `token` | The bar's local API key, if LAN access requires one |
+| `update_check` | `false` stops the daily check for a new release on GitHub |
 
 Over HTTP the key travels unencrypted: use a trusted network, or HTTPS if your device supports it. The busylib WebSocket SDK puts the key in a URL query and honors proxy environment variables; don't share those URLs or proxy logs.
 
@@ -145,7 +146,7 @@ More, including Claude settings conflicts and recovery: [troubleshooting](https:
 
 Limits worth knowing: Codex approval requests are only partly visible, cloud tasks and other machines aren't tracked. Details: [how it works](https://github.com/cmdai-hq/busy-crew/blob/main/docs/how-it-works.md), [tested versions](https://github.com/cmdai-hq/busy-crew/blob/main/docs/COMPATIBILITY.md).
 
-**Privacy:** Busy Crew talks only to your bar: frames, display cleanup and its button events, with the bar's API key if you set one. Apart from turn events and the questions an agent asks you, conversation content is never parsed, and nothing from it is stored, logged or sent. [What is read, kept and sent](https://github.com/cmdai-hq/busy-crew/blob/main/docs/privacy.md).
+**Privacy:** Busy Crew talks to your bar: frames, display cleanup and its button events, with the bar's API key if you set one. Once a day it asks GitHub for the number of its latest release; `"update_check": false` turns that off. Apart from turn events and the questions an agent asks you, conversation content is never parsed, and nothing from it is stored, logged or sent. [What is read, kept and sent](https://github.com/cmdai-hq/busy-crew/blob/main/docs/privacy.md).
 
 ## Development
 

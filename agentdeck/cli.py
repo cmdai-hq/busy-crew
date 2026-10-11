@@ -49,6 +49,7 @@ def main():
     menubar = sub.add_parser("menubar", help="optional macOS menu bar status icon")
     menubar.add_argument("action", choices=["install", "uninstall"])
     menubar.add_argument("--python", help=python_help)
+    sub.add_parser("upgrade", help="install the latest release with Homebrew or uv, then refresh the installation")
     sub.add_parser("status")
     sub.add_parser("ack")
     sub.add_parser("refresh", help="refresh token totals now instead of within 2 minutes")
@@ -85,6 +86,13 @@ def main():
             install_menubar(args.python)
         else:
             uninstall_menubar()
+    elif args.command == "upgrade":
+        from .updates import upgrade
+        try:
+            upgrade(state_dir())
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise SystemExit(str(exc)) from None
+        print("Updated Busy Crew and refreshed its installation")
     elif args.command == "status":
         state = current_status(state_dir())
         # CLI output intentionally omits session IDs.

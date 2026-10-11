@@ -562,6 +562,7 @@ def install_menubar(python=None):
             raise RuntimeError("Menu bar app failed to compile:\n" + (result.stderr or "")[-2000:])
         with _installation_lock(runtime):
             _deploy_menubar(launchctl, runtime, built, python)
+        (runtime / "menubar-update-failed").unlink(missing_ok=True)  # See updates.reinstall_menubar.
     finally:
         shutil.rmtree(build, ignore_errors=True)
     print("Installed the menu bar status icon")

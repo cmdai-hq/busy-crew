@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 from urllib.response import addinfourl
 
 from agentdeck.device import APPLICATION, MAX_RESPONSE_BYTES, Device
+from agentdeck.updates import UpdateCheck
 from agentdeck.model import Session
 from agentdeck.render import Frame, compact, render, visible_sessions
 from agentdeck.service import MAX_COMMANDS_PER_POLL, MAX_EVENTS, MAX_INBOX_FILES, Service, configure_logging
@@ -51,6 +52,8 @@ def service_fixture(runtime):
     service.observer = SimpleNamespace(poll=lambda: [], errors=[], acknowledge=MagicMock())
     service.usage = Usage(command="fixture-ccusage")
     service.device = SimpleNamespace(draw=MagicMock(), clear=MagicMock())
+    service.updates = UpdateCheck(runtime, "1.0.1", enabled=False)
+    service.install_mode = None
     return service
 
 

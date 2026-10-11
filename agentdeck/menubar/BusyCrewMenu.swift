@@ -26,6 +26,8 @@ struct Snapshot {
     var acknowledgeable = 0
     var tokens: [String: Int] = [:]
     var tokensAt: Double?
+    var latestVersion: String?
+    var installMode: String?
 
     static func stopped(_ reason: String) -> Snapshot {
         Snapshot(reasons: [reason])
@@ -62,6 +64,8 @@ struct Snapshot {
         snapshot.acknowledgeable = (status["acknowledgeable"] as? NSNumber)?.intValue ?? 0
         snapshot.tokens = (status["tokens"] as? [String: Any] ?? [:]).compactMapValues { ($0 as? NSNumber)?.intValue }
         snapshot.tokensAt = (status["tokens_at"] as? NSNumber)?.doubleValue
+        snapshot.latestVersion = status["latest_version"] as? String
+        snapshot.installMode = status["install_mode"] as? String
         return snapshot
     }
 
@@ -97,7 +101,7 @@ struct Entry {
 }
 
 /// The whole menu as data, shared by the status item and the headless `--menu` mode.
-func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date) -> [Entry] {
+func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date, updating: Bool = false) -> [Entry] {
     var entries = [Entry(title: "Busy Crew — " + (levelTitles[snapshot.level] ?? snapshot.level))]
     entries += snapshot.reasons.map { Entry(title: "  " + $0) }
     if let startedAt = snapshot.startedAt, snapshot.level != "stopped" {
@@ -123,6 +127,16 @@ func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date) -> [Entry]
         }
     }
     entries.append(.separator)
+    if let latest = snapshot.latestVersion, snapshot.level != "stopped" {
+        if updating {
+            entries.append(Entry(title: "Updating to \(latest)…"))
+        } else if ["homebrew", "uv"].contains(snapshot.installMode ?? "") {
+            // `busy-crew upgrade` runs the package manager, then reinstalls with the new version.
+            entries.append(Entry(title: "Update to \(latest)", action: #selector(AppDelegate.update), enabled: true))
+        } else if snapshot.installMode == "checkout" {
+            entries.append(Entry(title: "To update: git pull --ff-only && uv sync --locked, then uv run busy-crew install"))
+        }
+    }
     if snapshot.codeChanged {
         entries.append(Entry(title: "New version on disk — Reload collector", action: #selector(AppDelegate.reload),
                              enabled: true))
@@ -195,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let menu = NSMenu()
     var snapshot = Snapshot()
     var lastError: String?
+    var updating = false
     var timer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -229,7 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         refresh()
         menu.removeAllItems()
-        for entry in menuEntries(snapshot, lastError: lastError, now: Date()) {
+        for entry in menuEntries(snapshot, lastError: lastError, now: Date(), updating: updating) {
             if entry.isSeparator {
                 menu.addItem(.separator())
                 continue
@@ -257,6 +272,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         run(python, ["-I", "-m", "agentdeck.cli", "refresh"], name: "Refresh tokens now")
     }
 
+    @objc func update() {
+        guard let python = environment["AGENT_DECK_PYTHON"], !updating else { return }
+        updating = true
+        let name = "Update to \(snapshot.latestVersion ?? "the latest version") (see upgrade.log)"
+        run(python, ["-I", "-m", "agentdeck.cli", "upgrade"], name: name) { [weak self] in
+            self?.updating = false
+        }
+    }
+
     @objc func reload() {
         run("/bin/launchctl", ["kickstart", "-k", "gui/\(getuid())/\(serviceLabel)"], name: "Reload collector")
     }
@@ -271,7 +295,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.terminate(nil)  // Exit status 0: launchd leaves the icon closed until next login.
     }
 
-    func run(_ executable: String, _ arguments: [String], name: String) {
+    func run(_ executable: String, _ arguments: [String], name: String, completion: (() -> Void)? = nil) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -281,6 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let status = finished.terminationStatus
             DispatchQueue.main.async {
                 self?.lastError = status == 0 ? nil : "Last action failed: \(name)"
+                completion?()
                 self?.refresh()
             }
         }
@@ -288,6 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             try process.run()
         } catch {
             lastError = "Last action failed: \(name)"
+            completion?()
         }
     }
 }

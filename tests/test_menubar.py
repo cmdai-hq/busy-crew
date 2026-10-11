@@ -126,6 +126,7 @@ class MenuBarInstallTests(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch.dict(os.environ, {"HOME": str(self.home), "AGENT_DECK_STATE": str(self.runtime)}))
+        os.environ.pop("BUSY_CREW_PYTHON", None)  # Restored by patch.dict; tests set it themselves.
         stack.enter_context(patch.object(Path, "home", return_value=self.home))
         stack.enter_context(patch.object(installer, "_preflight", return_value="launchctl"))
         stack.enter_context(patch.object(installer.shutil, "which", return_value="/usr/bin/xcrun"))
@@ -163,6 +164,17 @@ class MenuBarInstallTests(unittest.TestCase):
             installer.install_menubar("/fictional/option/python")
         self.assertEqual(plistlib.loads(self.plist.read_bytes())["EnvironmentVariables"]["AGENT_DECK_PYTHON"],
                          "/fictional/option/python")
+
+    def test_successful_install_clears_a_failed_update_marker(self):
+        marker = self.runtime / "menubar-update-failed"
+        marker.touch()
+        self.tools.compile_fails = True
+        with self.assertRaises(RuntimeError):
+            installer.install_menubar()
+        self.assertTrue(marker.exists())
+        self.tools.compile_fails = False
+        installer.install_menubar()
+        self.assertFalse(marker.exists())
 
     def test_missing_compiler_changes_nothing(self):
         self.tools.compiler_missing = True
@@ -308,6 +320,18 @@ class SwiftAppTests(unittest.TestCase):
         self.assertIn("[x] Acknowledge results", self.menu(dict(status, acknowledgeable=1)))
         self.assertIn("[ ] Acknowledge results", self.menu(None))
         self.assertIn("[x] Reload collector", self.menu(None))
+
+    def test_update_entry_follows_the_installation_mode(self):
+        status = {"at": time.time(), "sessions": [], "latest_version": "1.1.0",
+                  "health": {"level": "update", "reasons": ["Version 1.1.0 available"]}}
+        for mode in ["homebrew", "uv"]:
+            with self.subTest(mode=mode):
+                self.assertIn("[x] Update to 1.1.0", [line.strip() for line in self.menu(dict(status, install_mode=mode))])
+        checkout = [line.strip() for line in self.menu(dict(status, install_mode="checkout"))]
+        self.assertIn("To update: git pull --ff-only && uv sync --locked, then uv run busy-crew install", checkout)
+        self.assertFalse(any("Update to" in line for line in checkout))
+        for content in [dict(status, install_mode=None), dict(status, latest_version=None, install_mode="homebrew")]:
+            self.assertFalse(any("Update to" in line or "To update" in line for line in self.menu(content)))
 
     def level(self, content):
         path = Path(self.temp.name) / "status.json"
