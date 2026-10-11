@@ -57,6 +57,12 @@ or cannot be read. An initially absent registry is normal, but cannot establish
 orphanhood either. A hook currently writing is skipped until a later check. Empty lock
 files remain after their snapshots are deleted.
 
+Orphan decisions use a complete scan of native session identifiers. A malformed
+or vanished native record makes that scan incomplete; hook corruption and result
+ledger write failures cannot alter the identifiers that were read. Maximum-age
+cleanup still runs when result persistence fails. The hourly interval uses
+elapsed monotonic time, so adjusting the system clock cannot trigger extra passes.
+
 `uninstall` keeps this folder so you can recover a backup; delete it yourself when you no longer need it.
 
 ## What Busy Crew changes

@@ -26,7 +26,7 @@ class HookCleanupTests(unittest.TestCase):
         self.now = 200000.0
         self.observer = Observer(self.runtime, self.root, clock=lambda: self.now,
                                  alive=lambda *_: True, claude_root=self.claude,
-                                 codex_root=self.root / "codex")
+                                 codex_root=self.root / "codex", monotonic=lambda: self.now)
 
     def emit(self, sid, at, event="UserPromptSubmit", **extra):
         """Run the real hook reducer and locked writer with a synthetic stdin event."""
@@ -96,6 +96,91 @@ class HookCleanupTests(unittest.TestCase):
         self.observer.poll()
         self.assertFalse(stale.exists())
         self.assertNotIn(stale.name, self.observer.hook_cache)
+
+    def test_wall_clock_adjustment_cannot_bypass_hourly_cadence(self):
+        """Retention uses wall time, while elapsed cleanup cadence ignores clock jumps."""
+        elapsed = [0.0]
+        self.observer.monotonic = lambda: elapsed[0]
+        self.observer.poll()
+        stale = self.emit("stale", self.now - 86401)
+        self.now += 86400  # Wall time jumps without an hour of elapsed time.
+        self.observer.poll()
+        self.assertTrue(stale.exists())
+        elapsed[0] += 3600
+        self.observer.poll()
+        self.assertFalse(stale.exists())
+
+    def test_retention_matrix_with_independent_hook_and_registry_errors(self):
+        """Check all age boundaries across registry availability and hook corruption."""
+        ages = (-1, 0, 3599, 3600, 3601, 86400, 86401)
+        # Expected retention from the policy, indexed by the seven ages above.
+        uncertain_or_present = (True, True, True, True, True, True, False)
+        proven_absent = (True, True, True, True, False, False, False)
+        policies = {
+            "initially_absent": uncertain_or_present,
+            "empty": proven_absent,
+            "live": uncertain_or_present,
+            "malformed": uncertain_or_present,
+            "missing_identity": uncertain_or_present,
+            "disappeared": uncertain_or_present,
+            "unreadable": uncertain_or_present,
+            "incompatible": uncertain_or_present,
+            "vanished_record": uncertain_or_present,
+        }
+        registry_errors = {"malformed", "missing_identity", "disappeared", "unreadable", "incompatible"}
+        case = 0
+        for registry, expected_retention in policies.items():
+            for age, retain in zip(ages, expected_retention):
+                for hook_health in ("healthy", "malformed_json", "invalid_identity"):
+                    with self.subTest(registry=registry, age=age, hook_health=hook_health):
+                        case += 1
+                        home = self.root / str(case)
+                        self.runtime, self.claude = home / "runtime", home / "claude"
+                        self.now = 200000.0
+                        sessions = self.claude / "sessions"
+                        if registry != "initially_absent":
+                            sessions.mkdir(parents=True)
+                        if registry in {"live", "vanished_record"}:
+                            self.native("candidate")
+                        elif registry == "malformed":
+                            (sessions / "broken.json").write_text("{broken")
+                        elif registry == "missing_identity":
+                            write_json(sessions / "broken.json", {"pid": 123})
+                        self.observer = Observer(self.runtime, home, clock=lambda: self.now,
+                                                 monotonic=lambda: 0, alive=lambda *_: True,
+                                                 claude_root=self.claude, codex_root=home / "codex")
+                        if registry == "disappeared":
+                            sessions.rmdir()
+                        elif registry == "incompatible":
+                            sessions.rmdir()
+                            sessions.write_text("not a directory")
+                        candidate = self.emit("candidate", self.now - age)
+                        if hook_health == "malformed_json":
+                            self.emit("broken-hook", self.now).write_text("{broken")
+                        elif hook_health == "invalid_identity":
+                            (self.runtime / "hooks" / "-broken.json").write_text(json.dumps(
+                                {"id": "bad\ud800", "state": "idle", "at": self.now - 86401}))
+                        iterdir, load = Path.iterdir, observe.load_json
+
+                        def list_files(path):
+                            """Inject enumeration failure while leaving hook files accessible."""
+                            if registry == "unreadable" and path == sessions:
+                                raise PermissionError
+                            return iterdir(path)
+
+                        def read_file(path, *args, **kwargs):
+                            """Race a native record removal between listing and reading."""
+                            if registry == "vanished_record" and path == sessions / "candidate.json":
+                                path.unlink()
+                            return load(path, *args, **kwargs)
+
+                        with patch.object(Path, "iterdir", list_files), \
+                             patch.object(observe, "load_json", side_effect=read_file):
+                            self.observer.poll()
+                        self.assertEqual(candidate.exists(), retain)
+                        self.assertEqual(bool(self.observer.errors), hook_health != "healthy" or registry in registry_errors)
+                        if not retain:
+                            self.assertNotIn(candidate.name, self.observer.hook_cache)
 
     def test_busy_writer_is_skipped_without_removing_its_lock(self):
         """A contended real flock defers deletion and keeps the writer's inode stable."""
@@ -243,6 +328,17 @@ class HookCleanupTests(unittest.TestCase):
         self.assertTrue(broken.exists())
         self.assertEqual(self.observer.errors, ["claude"])
 
+    def test_unencodable_hook_identity_cannot_block_other_expiry(self):
+        """Malformed Unicode metadata must fail validation before hashing or persistence."""
+        expired = self.emit("expired", self.now - 86401)
+        broken = self.runtime / "hooks" / "-broken.json"
+        broken.write_text(json.dumps({"id": "bad\ud800", "state": "idle", "at": self.now - 86401}))
+        self.observer.poll()
+        self.assertFalse(expired.exists())
+        self.assertTrue(broken.exists())
+        self.assertEqual(self.observer.errors, ["claude"])
+        self.assertEqual(self.observer.error_summary(), "claude (Invalid session/turn identifier)")
+
     def test_corrupt_hook_does_not_disable_orphan_cleanup(self):
         """Neither fresh nor cached hook errors obscure a complete registry scan."""
         broken = self.emit("broken", self.now - 7200)
@@ -275,6 +371,32 @@ class HookCleanupTests(unittest.TestCase):
         self.now += 3600
         self.observer.poll()
         self.assertFalse(stale.exists())
+        self.assertFalse(self.observer.errors)
+
+    def test_result_ledger_failure_cannot_skip_age_expiry(self):
+        """A failed result-ledger write cannot prevent independently eligible cleanup."""
+        self.emit("live", self.now)
+        self.now += 1
+        live = self.emit("live", self.now, "Stop")
+        self.native("live", "idle")
+        self.assertEqual(self.observer.poll()[0].state, "ready")
+        (self.claude / "sessions/live.json").unlink()
+        expired = self.emit("expired", self.now - 86401)
+        self.now += 3600
+
+        def fail_ledger(path, data, **kwargs):
+            """Fail only result persistence, keeping the hook filesystem writable."""
+            if path == self.runtime / "completions.json":
+                raise PermissionError
+            return write_json(path, data, **kwargs)
+
+        with patch.object(observe, "write_json", side_effect=fail_ledger):
+            self.assertEqual(self.observer.poll(), [])
+        self.assertFalse(expired.exists())
+        self.assertTrue(live.exists())  # Exactly at grace, so unrelated metadata is retained.
+        self.assertEqual(self.observer.errors, ["claude"])
+        self.assertNotIn(expired.name, self.observer.hook_cache)
+        self.observer.poll()
         self.assertFalse(self.observer.errors)
 
     def test_only_canonical_names_are_deleted(self):

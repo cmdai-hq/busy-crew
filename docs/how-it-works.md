@@ -74,6 +74,11 @@ An unavailable or incompatible registry directory remains a source error and
 disables absence-based deletion, while cleanup by maximum age still runs.
 An initially absent directory is normal, but absence-based deletion still waits
 until an existing registry is read successfully.
+The adapter collects native identities before updating result ledgers. An
+unreadable, malformed or vanished record makes identity completeness uncertain.
+Cleanup runs in a `finally` block, so result-ledger write failures cannot bypass
+it or change which session identities were observed. Snapshot age uses wall
+timestamps; the hourly cadence uses a monotonic clock.
 After cleanup, a new prompt or resumed tool activity creates a new random turn
 ID, so an earlier acknowledgment cannot hide its next result.
 
