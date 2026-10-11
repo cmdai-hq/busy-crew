@@ -8,6 +8,9 @@
   no session works or waits and nothing changed for 10 seconds. A button press
   wakes it at once; a `busy-crew` or menu command, or a write from Claude,
   within a second. The bar's lease is still renewed every 5 seconds.
+
+## 1.1.2 — 2026-10-11
+
 - A Codex turn that writes more than 32 MB to its journal (a long run of tool
   calls) no longer turns the Codex family into `?` with "Selected turn boundary
   unavailable". The collector finds the turn's start once, reading back up to
