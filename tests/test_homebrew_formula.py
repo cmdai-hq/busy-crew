@@ -16,6 +16,7 @@ FORMULA = '''class BusyCrew < Formula
   license "MIT"
 
   depends_on "pydantic"
+  depends_on "python@3.15"
 
   pypi_packages package_name:     "busy-crew",
                 exclude_packages: %w[pydantic pydantic-core]
@@ -41,7 +42,15 @@ LOCK = {"package": [
     {"name": "busylib", "version": "2.6.0", "dependencies": [
         {"name": "pydantic"}, {"name": "httpx2"}, {"name": "typing-extensions"}]},
     {"name": "httpx2", "version": "2.13.1", "dependencies": [
-        {"name": "idna"}, {"name": "httpx2-jsfetch", "marker": "sys_platform == 'emscripten'"}]},
+        {"name": "idna"}, {"name": "httpx2-jsfetch", "marker": "sys_platform == 'emscripten'"},
+        {"name": "linux-only", "marker": "sys_platform == 'linux'"},
+        # Mixed, as in the real uv.lock: applies on macOS before Python 3.15 only.
+        {"name": "older-pythons", "marker": "(python_full_version < '3.15' and sys_platform != 'emscripten') or "
+                                            "(python_full_version < '3.12' and sys_platform == 'emscripten')"},
+        {"name": "intel-only", "marker": "platform_machine == 'x86_64'"}]},
+    {"name": "linux-only", "version": "1.0"},
+    {"name": "older-pythons", "version": "1.0"},
+    {"name": "intel-only", "version": "1.0"},
     {"name": "httpx2-jsfetch", "version": "1.0"},
     {"name": "idna", "version": "3.20"},
     {"name": "pillow", "version": "12.3.0"},
@@ -63,10 +72,28 @@ class FormulaUpdateTests(unittest.TestCase):
                       '  sha256 "sha-busy-crew-1.1.0"\n', updated)
         resources = [line.split('"')[1] for line in updated.splitlines() if line.startswith("  resource ")]
         # Excluded formulae and what only they need, and other platforms' packages, are left out.
-        self.assertEqual(resources, ["test-image", "busylib", "httpx2", "idna", "pillow", "typing-extensions"])
+        self.assertEqual(resources, ["test-image", "busylib", "httpx2", "idna", "intel-only", "pillow",
+                                     "typing-extensions"])
         self.assertNotIn("removed-dependency", updated)
         self.assertIn('    url "https://files.pythonhosted.org/idna-3.20.tar.gz"\n    sha256 "sha-idna-3.20"\n', updated)
         self.assertLess(updated.index('resource "typing-extensions"'), updated.index("  def install"))
+
+    def test_markers_are_evaluated_for_the_formula_python(self):
+        older = FORMULA.replace('depends_on "python@3.15"', 'depends_on "python@3.14"')
+        self.assertIn('resource "older-pythons"', homebrew_formula.update(older, "1.1.0", LOCK, lookup))
+        self.assertNotIn('resource "older-pythons"', homebrew_formula.update(FORMULA, "1.1.0", LOCK, lookup))
+
+    def test_failed_lookup_leaves_the_formula_untouched(self):
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            formula, lock = Path(directory) / "busy-crew.rb", Path(directory) / "uv.lock"
+            formula.write_text(FORMULA)
+            lock.write_text('[[package]]\nname = "busy-crew"\nversion = "1.1.0"\n')
+            with patch.object(homebrew_formula, "sdist", side_effect=OSError("PyPI unavailable")):
+                with self.assertRaises(OSError):
+                    homebrew_formula.main(formula, "1.1.0", lock)
+            self.assertEqual(formula.read_text(), FORMULA)
 
     def test_updating_twice_changes_nothing(self):
         once = homebrew_formula.update(FORMULA, "1.1.0", LOCK, lookup)
@@ -76,7 +103,7 @@ class FormulaUpdateTests(unittest.TestCase):
         import tomllib
         with open(Path(__file__).parents[1] / "uv.lock", "rb") as source:
             lock = tomllib.load(source)
-        needed = homebrew_formula.dependencies(lock, {"pillow", "pydantic", "pydantic-core"})
+        needed = homebrew_formula.dependencies(lock, {"pillow", "pydantic", "pydantic-core"}, "3.15")
         self.assertIn("busylib", needed)
         self.assertIn("pydantic-settings", needed)
         for provided in ["pillow", "pydantic", "pydantic-core", "httpx2-jsfetch", "busy-crew"]:

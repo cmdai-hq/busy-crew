@@ -47,7 +47,17 @@ unit tests and wheel smoke tests do not establish those results.
    [docs/privacy.md](docs/privacy.md)) and offer **Update to X** in the menu
    bar icon.
 
-The workflow needs the `pypi` environment (with required reviewers), a PyPI
-trusted publisher for `release.yml`, and a `HOMEBREW_TAP_TOKEN` secret: a
-fine-grained token limited to `cmdai-hq/homebrew-tap` with read and write
-access to contents and pull requests.
+Before the first release, set up:
+
+- the `pypi` environment in this repository, with required reviewers;
+- a PyPI trusted publisher for `busy-crew`: owner `cmdai-hq`, repository
+  `busy-crew`, workflow `release.yml`, environment `pypi`;
+- a `HOMEBREW_TAP_TOKEN` secret: a fine-grained token limited to
+  `cmdai-hq/homebrew-tap`, with read and write access to contents and pull
+  requests;
+- on `cmdai-hq/homebrew-tap`: **Allow auto-merge** in the settings, and a
+  branch rule on `main` that requires the `test-bot (macos-latest)` check.
+  Without the required check, auto-merge does not wait for `brew test-bot`.
+
+Re-running a failed Release job is safe: the tap step reuses its branch and
+pull request, and stops if the tap already has the version.
