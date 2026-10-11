@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- A Codex turn that writes more than 32 MB to its journal (a long run of tool
+  calls) no longer turns the Codex family into `?` with "Selected turn boundary
+  unavailable". The collector finds the turn's start once, reading back up to
+  256 MB, then reads only what Codex appends: about 1 ms per change instead of
+  rereading up to 32 MB every second.
+
 ## 1.1.1 — 2026-10-11
 
 - The menu bar icon is now the duo: a rounded square split into Claude's and

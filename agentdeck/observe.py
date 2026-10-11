@@ -17,7 +17,8 @@ from .model import Session
 from .storage import claude_dir, codex_dir, load_json, write_json
 
 STATES = {"working", "waiting", "ready", "idle", "unknown"}
-MAX_ROLLOUT_SCAN = 32_000_000
+# Read once per turn: later polls read only what Codex appended (extend_turn).
+MAX_ROLLOUT_SCAN = 256_000_000
 MAX_RECORD = 2_000_000
 CODEX_DATABASES = ("state_5.sqlite", "thread_history_1.sqlite")
 # Events that change a turn's state (see rollout_details). Any other oversized record is left out.
@@ -168,7 +169,26 @@ def oversized_record(head):
 
 def read_turn(path, turn_id):
     """Read backwards to a verified selected-turn boundary, with explicit limits."""
-    records, buffer, terminated, oversized, head = [], b"", False, False, b""
+    return read_turn_tail(path, turn_id)[0]
+
+
+def is_boundary(record, turn_id):
+    payload = record.get("payload", {})
+    return (record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"}
+            and payload.get("turn_id") == turn_id)
+
+
+class BoundaryUnavailable(SourceError):
+    """The selected turn's start is not in the scanned tail; `end` is where complete lines stop."""
+
+    def __init__(self, end):
+        super().__init__("Selected turn boundary unavailable")
+        self.end = end
+
+
+def read_turn_tail(path, turn_id):
+    """The selected turn's records, and the offset just past the last complete line read."""
+    records, buffer, terminated, oversized, head, complete_end = [], b"", False, False, b"", 0
     with path.open("rb") as handle:
         position = handle.seek(0, 2)
         floor = max(0, position - MAX_ROLLOUT_SCAN)
@@ -194,7 +214,7 @@ def read_turn(path, turn_id):
                 if end < 0:
                     buffer = b""
                     continue
-                buffer, terminated = buffer[:end], True
+                buffer, terminated, complete_end = buffer[:end], True, position + end + 1
             lines = buffer.split(b"\n")
             buffer = lines.pop(0)
             for line in reversed(lines):
@@ -209,9 +229,8 @@ def read_turn(path, turn_id):
                     raise SourceError("Rollout record exceeds size limit")
                 record = record_json(line)
                 records.append(record)
-                payload = record.get("payload", {})
-                if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
-                    return list(reversed(records))
+                if is_boundary(record, turn_id):
+                    return list(reversed(records)), complete_end
             if len(buffer) > MAX_RECORD:
                 oversized, head, buffer = True, buffer[:4096], b""
         if floor == 0 and (oversized or len(buffer) > MAX_RECORD):
@@ -221,10 +240,40 @@ def read_turn(path, turn_id):
             record = record_json(buffer) if outcome is DECODE else outcome
             if record:
                 records.append(record)
-                payload = record.get("payload", {})
-                if record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"} and payload.get("turn_id") == turn_id:
-                    return list(reversed(records))
-    raise SourceError("Selected turn boundary unavailable")
+                if is_boundary(record, turn_id):
+                    return list(reversed(records)), complete_end
+    raise BoundaryUnavailable(complete_end)
+
+
+def extend_turn(path, start):
+    """Records Codex appended after `start`, a line boundary, and the offset past the last complete line.
+
+    Reading forward only what is new keeps a long turn cheap: its start can be far behind.
+    """
+    records, data, base, end, skipping, head = [], b"", start, start, False, b""
+    with path.open("rb") as handle:
+        handle.seek(start)
+        while chunk := handle.read(65536):
+            data += chunk
+            while (newline := data.find(b"\n")) >= 0:
+                line, data = data[:newline], data[newline + 1:]
+                end = base + newline + 1
+                base = end
+                if skipping:
+                    # The newline that ends an oversized record: only its start, kept, says what it was.
+                    skipping, record = False, oversized_record(head)
+                elif len(line) > MAX_RECORD:
+                    record = oversized_record(line[:4096])
+                else:
+                    outcome = triage(line)
+                    record = record_json(line) if outcome is DECODE else outcome
+                if record:
+                    records.append(record)
+            if not skipping and len(data) > MAX_RECORD:
+                skipping, head = True, data[:4096]
+            if skipping:
+                base, data = base + len(data), b""
+    return records, end
 
 
 def rollout_details(records, turn_id):
@@ -515,6 +564,33 @@ class Observer:
                     self._forget(key)
         return result
 
+    def _turn_details(self, sid, path, stat, version):
+        """The selected turn's details, reading only what Codex appended since the last poll when it can."""
+        identity = (str(path.resolve()), stat.st_dev, stat.st_ino, version)
+        change = (stat.st_mtime_ns, stat.st_size)
+        cached = self.tail_cache.get(sid)
+        if cached and cached["identity"] == identity and cached["change"] == change:
+            return cached["outcome"]
+        try:
+            if cached and cached["identity"] == identity and cached["end"] is not None and stat.st_size >= cached["end"]:
+                more, end = extend_turn(path, cached["end"])
+                if cached["records"] is not None:
+                    records = cached["records"] + more
+                else:  # Still waiting for the turn's start to appear.
+                    start = next((index for index, record in enumerate(more) if is_boundary(record, version)), None)
+                    records = None if start is None else more[start:]
+            else:
+                records, end = read_turn_tail(path, version)
+            outcome = BoundaryUnavailable(end) if records is None else rollout_details(records, version)
+        except BoundaryUnavailable as exc:
+            # Later polls read only what is appended, looking for the start: a long turn is not rescanned.
+            records, end, outcome = None, exc.end, exc
+        except ValueError as exc:
+            # An unreadable rollout stays so until it changes: don't rescan it every poll.
+            records, end, outcome = None, None, exc
+        self.tail_cache[sid] = {"identity": identity, "change": change, "records": records, "end": end, "outcome": outcome}
+        return outcome
+
     def codex(self):
         state_db, history_db = (self.codex_root / name for name in CODEX_DATABASES)
         if not state_db.exists() or not history_db.exists():
@@ -564,19 +640,9 @@ class Observer:
                         raise SourceError("Invalid rollout path")
                     path = Path(thread["rollout_path"])
                     stat = path.stat()
-                    cache_key = (str(path.resolve()), stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size, version)
-                    cached = self.tail_cache.get(sid)
-                    if not cached or cached[0] != cache_key:
-                        try:
-                            outcome = rollout_details(read_turn(path, version), version)
-                        except ValueError as exc:
-                            # An unreadable rollout stays so until it changes: don't rescan it every poll.
-                            outcome = exc
-                        cached = (cache_key, outcome)
-                        self.tail_cache[sid] = cached
-                    if isinstance(cached[1], Exception):
-                        raise cached[1].with_traceback(None)
-                    details = cached[1]
+                    details = self._turn_details(sid, path, stat, version)
+                    if isinstance(details, Exception):
+                        raise details.with_traceback(None)
                     completed_at = details["completed_at"] or completed_at
                     freshness = max(stat.st_mtime, timestamp(thread["updated_at"]))
                     if details["superseded"] or details["terminal"] in {"failed", "aborted"} or status in {"failed", "interrupted", "cancelled", "canceled"}:

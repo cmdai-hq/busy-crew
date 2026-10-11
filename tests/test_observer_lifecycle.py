@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from agentdeck import hook, observe
 from agentdeck.model import layout
-from agentdeck.observe import Observer, pid_matches, read_turn, rollout_state, readonly_db
+from agentdeck.observe import Observer, extend_turn, pid_matches, read_turn, read_turn_tail, rollout_state, readonly_db
 from agentdeck.storage import load_json, write_json
 from agentdeck.service import Service
 
@@ -656,7 +656,7 @@ class LifecycleTests(unittest.TestCase):
 
     def test_unreadable_rollout_is_not_rescanned_until_it_changes(self):
         self.codex_fixture([function("function_call", name="request_user_input", call_id="q")])
-        with patch("agentdeck.observe.read_turn", wraps=read_turn) as reader:
+        with patch("agentdeck.observe.read_turn_tail", wraps=read_turn_tail) as reader:
             for _ in range(3):
                 self.assertEqual(self.observer.poll(), [])
                 self.assertEqual(self.observer.errors, ["codex"])
@@ -665,7 +665,57 @@ class LifecycleTests(unittest.TestCase):
             with self.rollout.open("a") as stream:
                 stream.write(json.dumps(event("task_started", turn_id="turn")) + "\n")
             self.assertEqual(self.observer.poll()[0].state, "working")
-            self.assertEqual(reader.call_count, 2)
+            self.assertEqual(reader.call_count, 1)  # The start was found among the appended lines.
+
+    def test_turn_growing_past_the_scan_window_keeps_its_state(self):
+        # A long Codex turn wrote more than the backward scan window after its start (33.6 MB > 32 MB).
+        self.codex_fixture([event("task_started", turn_id="turn")])
+        with patch("agentdeck.observe.MAX_ROLLOUT_SCAN", 4000):
+            self.assertEqual(self.observer.poll()[0].state, "working")
+            with self.rollout.open("a") as stream:
+                for i in range(40):
+                    stream.write(json.dumps(event("token_count", info={"total": i})) + "\n")
+                    stream.write(json.dumps(function("function_call_output", call_id=str(i), output="x" * 200)) + "\n")
+            self.assertGreater(self.rollout.stat().st_size, 4000)
+            self.assertEqual(self.observer.poll()[0].state, "working")
+            self.assertEqual(self.observer.errors, [])
+            with self.rollout.open("a") as stream:
+                stream.write(json.dumps(function("function_call", name="request_user_input", call_id="q")) + "\n")
+            self.assertEqual(self.observer.poll()[0].state, "waiting")
+
+    def test_appended_lines_are_read_once_and_only_when_complete(self):
+        self.codex_fixture([event("task_started", turn_id="turn")])
+        self.assertEqual(self.observer.poll()[0].state, "working")
+        line = json.dumps(function("function_call", name="request_user_input", call_id="q"))
+        with self.rollout.open("a") as stream:
+            stream.write(line[:20])  # Codex is still writing the record.
+        with patch("agentdeck.observe.read_turn_tail", wraps=read_turn_tail) as rescan, \
+             patch("agentdeck.observe.extend_turn", wraps=extend_turn) as extend:
+            self.assertEqual(self.observer.poll()[0].state, "working")
+            with self.rollout.open("a") as stream:
+                stream.write(line[20:] + "\n")
+            self.assertEqual(self.observer.poll()[0].state, "waiting")
+            self.assertEqual(self.observer.poll()[0].state, "waiting")
+        rescan.assert_not_called()
+        self.assertEqual(extend.call_count, 2)  # Unchanged files are not read again.
+
+    def test_appended_oversized_records_follow_the_backward_rules(self):
+        path = self.root / "rollout"
+        start = json.dumps(event("task_started", turn_id="turn")) + "\n"
+        path.write_text(start)
+        _, end = read_turn_tail(path, "turn")
+        self.assertEqual(end, len(start))
+        with patch("agentdeck.observe.MAX_RECORD", 300):
+            with path.open("a") as stream:
+                stream.write(json.dumps(function("function_call_output", call_id="big", output="x" * 70000)) + "\n")
+                stream.write(json.dumps(event("task_complete", turn_id="turn")) + "\n")
+            records, new_end = extend_turn(path, end)
+            self.assertEqual(new_end, path.stat().st_size)
+            self.assertEqual([r["payload"]["type"] for r in records], ["function_call_output", "task_complete"])
+            with path.open("a") as stream:
+                stream.write(json.dumps(event("task_started", turn_id="next", note="x" * 70000)) + "\n")
+            with self.assertRaisesRegex(ValueError, "size limit"):
+                extend_turn(path, new_end)
 
     def test_rollout_scan_limit_is_explicit(self):
         path = self.root / "rollout"
