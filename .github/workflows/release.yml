@@ -46,3 +46,36 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+  homebrew:
+    needs: pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: cmdai-hq/homebrew-tap
+          path: tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      - name: Point the formula at the PyPI release
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: python3 -I scripts/homebrew_formula.py tap/Formula/busy-crew.rb "${TAG#v}" uv.lock
+      - name: Open the tap pull request, merged once its tests pass
+        working-directory: tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${TAG#v}"
+          branch="busy-crew-$version"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "busy-crew $version"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title "busy-crew $version" \
+            --body "Release https://github.com/cmdai-hq/busy-crew/releases/tag/$TAG, from its PyPI sdist and uv.lock."
+          gh pr merge "$branch" --auto --squash --delete-branch
