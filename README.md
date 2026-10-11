@@ -32,7 +32,7 @@ When both families are active, the **duo** view above shows each family's count 
 | Gray `?` | Failed turn, unknown state or unreadable source |
 | `+N` | More sessions than the six slots |
 
-Token totals are shown in K (thousand), M (million) or G (billion) and include cache tokens. These captures are real: `uv run busy-crew snapshot --leds` on the author's bar.
+Token totals are shown in K (thousand), M (million) or G (billion) and include cache tokens. These captures are real, taken on the author's bar with commands like `uv run busy-crew snapshot docs/tokens-today.png --leds`.
 
 ## Requirements
 
