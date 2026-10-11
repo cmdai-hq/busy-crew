@@ -22,7 +22,9 @@ If a uv installation succeeds but `busy-crew` is not found, run `uv tool update-
 busy-crew install --address http://10.0.4.20 --timezone Europe/Paris
 ```
 
-Wait a few seconds, then run `busy-crew status`. A healthy collector reports `health.level: "ok"`, no `device_error` and `inputs_connected: true`. Source errors are listed separately.
+Wait a few seconds, then run `busy-crew status`. A connected collector reports no `device_error` and `inputs_connected: true`. Source errors are listed separately.
+
+`health.level` can be `ok`, `paused` (selector on Off/Settings) or `update` (an update is available or a reload is needed). Move the selector to an active position to see the sessions.
 
 Restart already-open Claude sessions if the new hooks do not appear in `/hooks`. To track Claude without hooks, add `--no-claude-hooks`; this mode does not infer a finished `✓` from busy → idle.
 
