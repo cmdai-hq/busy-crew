@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Clarify USB/Wi-Fi installation, configuration reloads, ccusage setup and
+  passive-hook updates. Add a short installation guide and a contributor module map.
+
 ## 1.1.2 — 2026-10-11
 
 - A Codex turn that writes more than 32 MB to its journal (a long run of tool

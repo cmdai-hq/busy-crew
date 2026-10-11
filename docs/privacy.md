@@ -6,7 +6,7 @@ Busy Crew runs on your Mac and talks to your BUSY Bar, at the address in `config
 
 | To | What | How |
 | --- | --- | --- |
-| Your BUSY Bar | A 72 × 16 pixel frame, and requests to clear Busy Crew's own frame | HTTP on your network, with the bar's API key in a header if you set one |
+| Your BUSY Bar | A 72 × 16 pixel frame, and requests to clear Busy Crew's own frame | HTTP on your network; Wi-Fi uses the local API password in a header, USB needs none |
 | Your BUSY Bar | A subscription to its button events (OK, Back, Start, the wheel, the selector) | WebSocket through the busylib SDK, which puts the key in the URL query |
 | Your BUSY Bar, only when you run `snapshot` | A request for the bar's current screen | HTTP, as above |
 | GitHub (`api.github.com`), at most once a day | A request for Busy Crew's latest release, with Busy Crew's version in the `User-Agent` header. No data about your agents or your bar | HTTPS, without credentials. GitHub sees your IP address. `"update_check": false` in `config.json` turns it off |
@@ -22,10 +22,12 @@ Nothing else leaves the Mac. Over plain HTTP, someone on your network could see 
 | Claude Code hook events (optional, `--no-claude-hooks` turns them off) | Session ID, event name, tool call IDs, timestamps, and a keyed fingerprint of a tool call's name and input to match a permission request to its call | The prompt text and tool inputs that Claude Code sends to every hook: read from stdin, never stored |
 | Codex `state_5.sqlite`, opened read-only | Conversation ID, journal path, last update time | Titles, first messages, previews |
 | Codex `thread_history_1.sqlite`, opened read-only | Last turn ID, its status and completion time | Every other column |
-| Codex conversation journal, from the end back to the start of the last turn | Turn start, end, failure and interruption events; approvals; question calls (`request_user_input`) and the call ID of their answer | Messages, reasoning, other tool calls, tool outputs, token counts: recognized from their first bytes and left undecoded |
+| Codex conversation journal | Turn start, end, failure and interruption events; approvals; question calls (`request_user_input`) and the call ID of their answer | Recognized messages, reasoning, other tool calls, tool outputs and token counts are left undecoded |
 | ccusage (optional, a third-party tool) | Today's and this month's total tokens per family | ccusage itself reads your Claude Code and Codex usage logs to count them |
 
-A Codex journal is read as bytes, so the content of the last turn passes through memory while Busy Crew looks for the events it needs. Only the records listed above are parsed, including the text of a question the agent asks you and an agent's last message in a turn-end event. Nothing from the journal is stored, logged or sent.
+A first read scans backward up to 256 MB to find the selected turn's start. Later reads process only appended records. Journal bytes pass through memory; recognized conversation records are skipped before JSON decoding.
+
+Decoded turn events and questions can include question text or the agent's last message. Those records are cached in memory for the current turn. Conversation text is never written to Busy Crew's state files, logged or sent.
 
 ## What is kept
 
@@ -35,7 +37,8 @@ Everything lives in a private folder (directories `0700`, data files and locks `
 | --- | --- |
 | `config.json` | The bar's address, time zone, ccusage path, and the bar's API key if you set one |
 | `status.json` | Session and turn IDs, their states, token totals, collector health |
-| `completions.json`, `acknowledged.json` | Session and turn IDs of finished responses and of those you acknowledged, with completion times |
+| `completions.json` | Session and turn IDs of finished responses, completion times and process identity when available |
+| `acknowledged.json` | Session and turn IDs of responses you acknowledged |
 | `hooks/*.json` | One file per Claude session: IDs, timestamps, keyed tool fingerprints |
 | `fingerprint.key` | The random per-installation key for those fingerprints, so a fingerprint cannot be matched against guessed commands |
 | `service.log` | Starts, stops and source or device status, with Busy Crew's own error messages only: never a path or conversation content |
@@ -48,6 +51,8 @@ Everything lives in a private folder (directories `0700`, data files and locks `
 
 ## What Busy Crew changes
 
-Only two things outside its own folder, both on `install` and reversed by `uninstall`: its hooks in Claude Code's settings (after a backup), and its LaunchAgents in `~/Library/LaunchAgents`. It never writes to Codex data or to Claude Code sessions.
+`install` adds hooks to Claude Code's settings after a backup, and LaunchAgents to `~/Library/LaunchAgents`. `uninstall` removes those owned entries. It never writes to Codex data or Claude Code sessions.
+
+If Claude settings are on another volume, private recovery copies may also be kept beside them in `.agent-deck-recovery`; atomic replacement requires the same filesystem.
 
 To report a privacy or security problem, see [SECURITY](../SECURITY.md).

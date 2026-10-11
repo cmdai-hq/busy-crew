@@ -6,13 +6,39 @@ You retain your copyright and must have the right to submit the contribution
 under these terms.
 Keep any required third-party license and copyright notices intact.
 
+## Start without a bar
+
 Use Python 3.11 or newer and [uv](https://docs.astral.sh/uv/):
 
 ```sh
+git clone https://github.com/cmdai-hq/busy-crew.git
+cd busy-crew
 uv sync --locked
 uv run python -m unittest discover -s tests -v
+uv run busy-crew demo /tmp/busy-crew-demo
 uv build
 ```
+
+Tests and demos need no device and install no collector or hooks. The demos
+produce fictional PNGs. With macOS Command Line Tools installed, also check
+the Swift menu app:
+
+```sh
+AGENT_DECK_SWIFT_TESTS=1 uv run python -m unittest tests.test_menubar
+```
+
+## Where to make changes
+
+| Area | Files in `agentdeck/` |
+| --- | --- |
+| Commands and installation | `cli.py`, `install.py` |
+| Claude/Codex tracking | `observe.py`, `hook.py` |
+| Collector loop and bar controls | `service.py`, `device.py` |
+| Layouts and characters | `render.py`, `model.py` |
+| Token totals | `usage.py` |
+| Health, releases and menu icon | `health.py`, `updates.py`, `menubar/BusyCrewMenu.swift` |
+
+## Tests and fixtures
 
 Tests must use temporary directories and synthetic Claude/Codex data. Mock
 launchctl, processes, network requests and the device. Do not install hooks,
@@ -25,8 +51,8 @@ and failure behavior. Record the tested source version and distinguish internal
 file formats from supported public APIs. For render changes, generate the
 fictional previews with `uv run busy-crew demo /tmp/busy-crew-demo` and inspect
 them at the native 72 × 16 resolution as well as enlarged. The README images in
-`docs/` are real captures (for example `uv run busy-crew snapshot docs/tokens-today.png --leds`); do not overwrite them
-with fictional previews.
+`docs/` are real captures (for example `uv run busy-crew snapshot docs/tokens-today.png --leds`);
+do not overwrite them with fictional previews. The menu image is a simulation.
 
 CI tests Linux and macOS on Python 3.11, 3.14 and 3.15. Device integration and real
 LaunchAgent lifecycle checks require an explicitly chosen test device/account;
@@ -39,10 +65,6 @@ and develop in a separate checkout. The LaunchAgent, the hooks and the menu bar
 icon then run a released version, whatever branch the checkout is on.
 `busy-crew status` shows which copy runs (`version`, `install_mode`).
 
-Most changes need nothing installed: the unit tests, `uv run busy-crew demo …`
-for rendering, and for the menu bar app
-`AGENT_DECK_SWIFT_TESTS=1 uv run python -m unittest tests.test_menubar`.
-
 To try a branch on the real bar, pause the installed collector, run the branch
 in the foreground, then resume. Only one collector can drive the bar at a time:
 
@@ -53,9 +75,9 @@ uv run busy-crew snapshot /tmp/front.png --leds       # from another terminal: w
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.busybar.agent-deck.plist   # back to the installed copy
 ```
 
-The foreground collector uses the same state folder and configuration, and
-reads the events of the installed hooks. A change to the hooks, the installer
-or the menu bar app needs the branch installed for a while instead:
+The foreground collector shares the installed copy's configuration, result
+ledgers and hook events. It can update acknowledgment data in that state folder.
+A change to the hooks, installer or menu app needs the branch installed instead:
 
 ```sh
 uv run busy-crew install           # the LaunchAgent and hooks now run this checkout
@@ -63,6 +85,8 @@ uv run busy-crew menubar install   # only for a change to the Swift app
 # … try it …
 busy-crew install && busy-crew menubar install   # back to the Homebrew copy
 ```
+
+For passive tracking, add `--no-claude-hooks` to both `install` commands.
 
 Each `install` replaces the previous copy's hooks and keeps the settings. While
 a checkout is installed, a `git switch` there changes what runs at the next
