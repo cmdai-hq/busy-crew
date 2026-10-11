@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add `snapshot --tiles`: each lit pixel as a rounded tile on a transparent
+  ground, with `--tiles light` drawing white text in dark ink for light pages.
+  The README captures use it, in both themes.
+
 ## 1.0.0 — 2026-10-11
 
 First public release, under the MIT License.

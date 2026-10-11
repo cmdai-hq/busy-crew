@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import sqlite3
@@ -31,6 +33,34 @@ def claude_duo_crop(state):
 
 
 class RenderingTests(unittest.TestCase):
+    def test_tiles_keep_lit_pixels_and_leave_unlit_ones_transparent(self):
+        from PIL import Image
+        from agentdeck.render import tiles
+        source = Image.new("RGB", (72, 16), (0, 0, 0))
+        source.putpixel((3, 2), (220, 134, 107))
+        image = tiles(source)
+        self.assertEqual((image.mode, image.size), ("RGBA", (1440, 320)))
+        self.assertEqual(image.getpixel((3 * 20 + 10, 2 * 20 + 10)), (220, 134, 107, 255))
+        self.assertEqual(image.getpixel((3 * 20, 2 * 20)), (0, 0, 0, 0))  # The gap between tiles.
+        self.assertEqual(image.getpixel((10, 10)), (0, 0, 0, 0))  # An unlit LED.
+
+    def test_light_tiles_ink_white_pixels_and_keep_colors(self):
+        from PIL import Image
+        from agentdeck.render import INK_ON_LIGHT, tiles
+        source = Image.new("RGB", (72, 16), (0, 0, 0))
+        source.putpixel((0, 0), (223, 233, 238))  # White text.
+        source.putpixel((1, 0), (120, 149, 255))  # Codex blue.
+        dark, light = tiles(source), tiles(source, ground="light")
+        self.assertEqual(dark.getpixel((10, 10))[:3], (223, 233, 238))
+        self.assertEqual(light.getpixel((10, 10))[:3], INK_ON_LIGHT)
+        self.assertEqual(light.getpixel((30, 10))[:3], (120, 149, 255))
+
+    def test_snapshot_tiles_and_leds_are_exclusive(self):
+        from agentdeck.cli import main
+        with patch("sys.argv", ["busy-crew", "snapshot", "out.png", "--tiles", "light", "--leds"]), \
+                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main()
+
     def test_dimmed_codex_keeps_a_visible_face(self):
         for sprite in [CODEX, MINI_CODEX]:
             frame = Frame()
