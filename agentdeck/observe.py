@@ -331,7 +331,7 @@ class Observer:
         self.claude_root = Path(claude_root) if claude_root is not None else claude_dir(self.home)
         self.codex_root = Path(codex_root) if codex_root is not None else codex_dir(self.home)
         self.clock, self.alive, self.started = clock, alive, clock()
-        self.previous, self.instances, self.tail_cache = {}, {}, {}
+        self.previous, self.instances, self.tail_cache, self.hook_cache = {}, {}, {}, {}
         self.errors, self.state_errors = [], set()  # Ledgers that could not be read intact.
         self.causes = {}  # Provider -> why it failed, for the log; never a path or content.
         self.acks = self._load_state("acknowledged.json")
@@ -464,33 +464,60 @@ class Observer:
             raise SourceError("Source directory incompatible")
         return sorted(p for p in path.iterdir() if p.suffix == ".json")
 
+    @staticmethod
+    def _hook(path):
+        """A validated hook snapshot, None when it vanished, or the error that makes it unreadable."""
+        try:
+            data = load_json(path)
+            if data is None:  # A concurrent hook cleanup removed the listed file.
+                return None
+            identifier(data.get("id"))
+            timestamp(data.get("at"))
+            if data.get("state") not in STATES | {"closed"}:
+                raise SourceError("Invalid hook state")
+            if data.get("schema") == 2 and not valid_snapshot(data):
+                raise SourceError("Invalid hook snapshot")
+            if data.get("schema") == 2 and data.get("turn"):
+                identifier(data["turn"])
+            elif data.get("schema") is None:
+                data = {key: data[key] for key in ("id", "state", "at")}
+            elif data.get("schema") != 2:
+                raise SourceError("Unsupported hook schema")
+            return data
+        except (OSError, ValueError, TypeError) as exc:
+            return exc
+
     def _hooks(self):
         hooks = {}
         directory = self.runtime / "hooks"
         if not directory.exists():
+            self.hook_cache.clear()
             return hooks
+        listed = set()
         for path in sorted(directory.iterdir()):
             if path.suffix != ".json":
                 continue
+            listed.add(path.name)
             try:
-                data = load_json(path)
-                if data is None:  # A concurrent hook cleanup removed the listed file.
-                    continue
-                sid = identifier(data.get("id"))
-                timestamp(data.get("at"))
-                if data.get("state") not in STATES | {"closed"}:
-                    raise SourceError("Invalid hook state")
-                if data.get("schema") == 2 and not valid_snapshot(data):
-                    raise SourceError("Invalid hook snapshot")
-                if data.get("schema") == 2 and data.get("turn"):
-                    identifier(data["turn"])
-                elif data.get("schema") is None:
-                    data = {key: data[key] for key in ("id", "state", "at")}
-                elif data.get("schema") != 2:
-                    raise SourceError("Unsupported hook schema")
-                hooks[sid] = data
-            except (OSError, ValueError, TypeError) as exc:
+                stat = path.stat()
+            except FileNotFoundError:  # A concurrent hook cleanup removed the listed file.
+                continue
+            except OSError as exc:
                 self._error("claude", exc)
+                continue
+            # Snapshots accumulate, one per session ever seen: only a rewritten one is read again.
+            # A hook replaces its file atomically, so every write brings a new inode.
+            change = (stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+            cached = self.hook_cache.get(path.name)
+            if cached is None or cached[0] != change:
+                cached = self.hook_cache[path.name] = (change, self._hook(path))
+            outcome = cached[1]
+            if isinstance(outcome, Exception):
+                self._error("claude", outcome)
+            elif outcome is not None:
+                hooks[outcome["id"]] = outcome
+        for name in set(self.hook_cache) - listed:
+            del self.hook_cache[name]
         return hooks
 
     def claude(self):

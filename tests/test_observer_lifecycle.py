@@ -355,6 +355,34 @@ class LifecycleTests(unittest.TestCase):
         self.observer.poll()
         self.assertFalse(self.observer.errors)
 
+    def test_unchanged_hook_snapshots_are_not_read_again(self):
+        self.native("busy")
+        self.emit("UserPromptSubmit")
+        write_json(self.runtime / "hooks" / "old.json", {"id": "old", "state": "waiting", "at": self.now})
+        self.observer.poll()
+        with patch("agentdeck.observe.load_json", wraps=observe.load_json) as load:
+            self.observer.poll()
+        self.assertNotIn(self.runtime / "hooks" / "a.json", [call.args[0] for call in load.call_args_list])
+        self.emit("Notification", notification_type="permission_prompt")  # Rewritten: read again.
+        with patch("agentdeck.observe.load_json", wraps=observe.load_json) as load:
+            self.assertEqual(self.observer.poll()[0].state, "unknown")
+        self.assertEqual([call.args[0].name for call in load.call_args_list if call.args[0].parent.name == "hooks"],
+                         ["a.json"])
+        (self.runtime / "hooks" / "old.json").unlink()
+        self.observer.poll()
+        self.assertEqual(set(self.observer.hook_cache), {"a.json"})
+
+    def test_cached_unreadable_hook_stays_an_error_until_rewritten(self):
+        self.native("busy")
+        (self.runtime / "hooks").mkdir(parents=True)
+        (self.runtime / "hooks" / "a.json").write_text("{broken")
+        for _ in range(2):
+            self.observer.poll()
+            self.assertEqual(self.observer.errors, ["claude"])
+        self.emit("UserPromptSubmit")
+        self.observer.poll()
+        self.assertFalse(self.observer.errors)
+
     def test_state_error_clears_once_each_corrupt_ledger_is_rewritten(self):
         (self.runtime).mkdir(parents=True, exist_ok=True)
         (self.runtime / "completions.json").write_text("{broken")
