@@ -60,6 +60,7 @@ class InstallationTests(unittest.TestCase):
         environment = dict(os.environ)
         environment.pop("CLAUDE_CONFIG_DIR", None)
         environment.pop("CODEX_HOME", None)
+        environment.pop("BUSY_CREW_PYTHON", None)  # Tests choose the interpreter themselves.
         environment.update(HOME=str(self.home), AGENT_DECK_STATE=str(self.runtime))
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)

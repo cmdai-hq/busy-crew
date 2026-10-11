@@ -137,7 +137,7 @@ def upgrade_command(mode, prefix=None):
 def upgrade(runtime):
     """Upgrade the package, then let the new version refresh its installation."""
     import fcntl
-    from .install import _load_manifest, interpreter, menubar_agent_path
+    from .install import _load_manifest, _read_plist, interpreter, launch_agent_path, menubar_agent_path
     mode = install_mode()
     if mode == "checkout":
         raise RuntimeError("This copy runs from a git checkout: run `git pull --ff-only && uv sync --locked`, "
@@ -152,8 +152,12 @@ def upgrade(runtime):
         except BlockingIOError:
             raise RuntimeError("An update is already running") from None
         manifest = _load_manifest(runtime)
-        python = interpreter()
-        install = [python, "-I", "-m", "agentdeck.cli", "install"]
+        # Keep the interpreter the installation runs, which `install --python` may have chosen.
+        agent = _read_plist(launch_agent_path()) or {}
+        arguments = agent.get("ProgramArguments")
+        installed = arguments[0] if isinstance(arguments, list) and arguments and isinstance(arguments[0], str) else None
+        python = installed or interpreter()
+        install = [python, "-I", "-m", "agentdeck.cli", "install", "--python", python]
         if manifest and not manifest["hook_commands"]:
             install.append("--no-claude-hooks")  # Keep a passive installation passive.
         log_path = runtime / "upgrade.log"
@@ -168,22 +172,22 @@ def upgrade(runtime):
             if menubar_agent_path().exists():
                 # Reinstalling the app stops it and everything it started: run this step detached,
                 # and record a failure where the collector reports it.
-                step = [python, "-I", "-m", "agentdeck.updates", "menubar"]
+                step = [python, "-I", "-m", "agentdeck.updates", "menubar", python]
                 print("$ " + " ".join(step), file=log, flush=True)
                 subprocess.Popen(step, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                  start_new_session=True)
     return mode
 
 
-def reinstall_menubar(runtime):
+def reinstall_menubar(runtime, python=None):
     from .install import install_menubar
     try:
-        install_menubar()
+        install_menubar(python)
     except Exception:
         (runtime / MENUBAR_FAILED).touch(mode=0o600)
         raise
 
 
-if __name__ == "__main__" and sys.argv[1:] == ["menubar"]:
+if __name__ == "__main__" and sys.argv[1:2] == ["menubar"] and len(sys.argv) <= 3:
     from .storage import state_dir
-    reinstall_menubar(state_dir())
+    reinstall_menubar(state_dir(), sys.argv[2] if len(sys.argv) == 3 else None)

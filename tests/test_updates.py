@@ -19,6 +19,7 @@ from agentdeck.updates import UpdateCheck, install_mode, parse_version, upgrade_
 from test_service_reliability import service_fixture
 
 DAY = updates.CHECK_EVERY
+PYTHON = "/fake/opt/busy-crew/libexec/bin/python"
 
 
 class Response(io.BytesIO):
@@ -206,7 +207,7 @@ class UpgradeTests(unittest.TestCase):
         stack.enter_context(patch.object(Path, "home", return_value=self.home))
         self.mode = stack.enter_context(patch.object(updates, "install_mode", return_value="homebrew"))
         stack.enter_context(patch.object(updates, "upgrade_command", return_value=["/fake/brew", "upgrade", "busy-crew"]))
-        stack.enter_context(patch("agentdeck.install.interpreter", return_value="/fake/opt/busy-crew/libexec/bin/python"))
+        stack.enter_context(patch("agentdeck.install.interpreter", return_value=PYTHON))
         self.run = stack.enter_context(patch.object(updates.subprocess, "run",
                                                     return_value=subprocess.CompletedProcess([], 0)))
         self.popen = stack.enter_context(patch.object(updates.subprocess, "Popen"))
@@ -217,24 +218,34 @@ class UpgradeTests(unittest.TestCase):
     def test_upgrades_then_reinstalls_with_the_new_version(self):
         self.assertEqual(updates.upgrade(self.runtime), "homebrew")
         self.assertEqual(self.commands(), [["/fake/brew", "upgrade", "busy-crew"],
-                                           ["/fake/opt/busy-crew/libexec/bin/python", "-I", "-m", "agentdeck.cli", "install"]])
+                                           [PYTHON, "-I", "-m", "agentdeck.cli", "install", "--python", PYTHON]])
         self.popen.assert_not_called()  # No menu bar app installed.
         log = self.runtime / "upgrade.log"
         self.assertEqual(log.stat().st_mode & 0o777, 0o600)
         self.assertIn("$ /fake/brew upgrade busy-crew", log.read_text())
 
+    def test_keeps_the_interpreter_the_installation_runs(self):
+        import plistlib
+        plist = self.home / "Library/LaunchAgents/local.busybar.agent-deck.plist"
+        plist.parent.mkdir(parents=True)
+        plist.write_bytes(plistlib.dumps({"Label": "local.busybar.agent-deck",
+                                          "ProgramArguments": ["/chosen/python", "-I", "-m", "agentdeck.cli", "run"]}))
+        updates.upgrade(self.runtime)
+        self.assertEqual(self.commands()[1], ["/chosen/python", "-I", "-m", "agentdeck.cli", "install",
+                                              "--python", "/chosen/python"])
+
     def test_passive_installation_stays_passive(self):
         write_json(self.runtime / "installation.json",
                    {"version": 1, "hook_settings": str(self.home / ".claude/settings.json"), "hook_commands": []})
         updates.upgrade(self.runtime)
-        self.assertEqual(self.commands()[1][-2:], ["install", "--no-claude-hooks"])
+        self.assertEqual(self.commands()[1][-1], "--no-claude-hooks")
 
     def test_menu_bar_app_is_reinstalled_detached_from_itself(self):
         plist = self.home / "Library/LaunchAgents/local.busybar.agent-deck.menubar.plist"
         plist.parent.mkdir(parents=True)
         plist.touch()
         updates.upgrade(self.runtime)
-        self.assertEqual(self.popen.call_args.args[0][-3:], ["-m", "agentdeck.updates", "menubar"])
+        self.assertEqual(self.popen.call_args.args[0][-4:], ["-m", "agentdeck.updates", "menubar", PYTHON])
         self.assertTrue(self.popen.call_args.kwargs["start_new_session"])
 
     def test_failed_package_upgrade_leaves_the_installation_alone(self):
@@ -280,12 +291,12 @@ class ModuleEntryTests(unittest.TestCase):
         temp = tempfile.mkdtemp()
         self.addCleanup(__import__("shutil").rmtree, temp)
         result = subprocess.run([updates.sys.executable, "-I", "-c",
-                                 "import runpy, sys; sys.argv = ['x', 'menubar'];"
-                                 "import agentdeck.install as i; i.install_menubar = lambda: print('reinstalled');"
+                                 "import runpy, sys; sys.argv = ['x', 'menubar', '/chosen/python'];"
+                                 "import agentdeck.install as i; i.install_menubar = lambda python: print('reinstalled', python);"
                                  "runpy.run_module('agentdeck.updates', run_name='__main__')"],
                                 capture_output=True, text=True, timeout=30,
                                 env=dict(os.environ, BUSY_CREW_STATE=temp))
-        self.assertEqual((result.returncode, result.stdout), (0, "reinstalled\n"), result.stderr)
+        self.assertEqual((result.returncode, result.stdout), (0, "reinstalled /chosen/python\n"), result.stderr)
 
 
 if __name__ == "__main__":

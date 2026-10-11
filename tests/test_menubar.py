@@ -126,6 +126,7 @@ class MenuBarInstallTests(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch.dict(os.environ, {"HOME": str(self.home), "AGENT_DECK_STATE": str(self.runtime)}))
+        os.environ.pop("BUSY_CREW_PYTHON", None)  # Restored by patch.dict; tests set it themselves.
         stack.enter_context(patch.object(Path, "home", return_value=self.home))
         stack.enter_context(patch.object(installer, "_preflight", return_value="launchctl"))
         stack.enter_context(patch.object(installer.shutil, "which", return_value="/usr/bin/xcrun"))
