@@ -446,11 +446,24 @@ class Observer:
             threads = state.execute("""SELECT id, rollout_path, updated_at FROM threads
                 WHERE archived=0 AND agent_path IS NULL AND thread_source='user'
                 AND updated_at > ? ORDER BY updated_at DESC LIMIT 200""", (now - CODEX_STALE,)).fetchall()
+            threads = list(threads)
             ids = {row["id"] for row in threads}
-            # Results and acknowledgements die with their conversation: archived, or silent too long.
-            for key in set(self.results) | set(self.acks):
-                if key.startswith("codex:") and key[6:] not in ids:
-                    self._forget(key)
+            # Results and acknowledgements die with their conversation: archived, or silent too
+            # long. Saved identities beyond the page are checked in bounded batches, not presumed dead.
+            old = [key for key in set(self.results) | set(self.acks) if key.startswith("codex:") and key[6:] not in ids]
+            for offset in range(0, len(old), 200):
+                keys = old[offset:offset + 200]
+                placeholders = ",".join("?" for _ in keys)
+                rows = state.execute(f"""SELECT id, rollout_path, updated_at FROM threads WHERE id IN ({placeholders})
+                    AND archived=0 AND agent_path IS NULL AND thread_source='user' AND updated_at > ?""",
+                    [key[6:] for key in keys] + [now - CODEX_STALE]).fetchall()
+                eligible = {row["id"]: row for row in rows}
+                for key in keys:
+                    sid = key[6:]
+                    if sid not in eligible:
+                        self._forget(key)
+                    elif key in self.results:
+                        threads.append(eligible[sid])
             for thread in threads:
                 sid = None
                 try:

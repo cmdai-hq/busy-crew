@@ -559,6 +559,17 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.new_observer().poll(), [])
         self.assertFalse(load_json(self.runtime / "completions.json"))
 
+    def test_pending_codex_result_beyond_the_recent_page_is_kept(self):
+        self.codex_fixture([event("task_started", turn_id="turn"), event("task_complete", turn_id="turn")], "completed", self.now + 1)
+        self.now += 1
+        first = self.observer.poll()[0]
+        with closing(sqlite3.connect(self.codex / "state_5.sqlite")) as db:
+            db.executemany("INSERT INTO threads VALUES(?,?,?,?,?,?)",
+                           [(f"other{i}", str(self.rollout), self.now, 0, None, "user") for i in range(200)])
+            db.commit()
+        self.assertEqual(self.observer.poll(), [first])
+        self.assertIn("codex:c", self.observer.results)
+
     def test_touched_old_codex_conversation_does_not_revive_its_result(self):
         self.codex_fixture([event("task_started", turn_id="turn"), event("task_complete", turn_id="turn")], "completed", self.now + 1)
         self.now += 1
