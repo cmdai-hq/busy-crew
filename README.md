@@ -107,7 +107,7 @@ Over HTTP the key travels unencrypted: use a trusted network, or HTTPS if your d
 
 Start with `uv run agent-deck status`.
 
-- **The bar went dark:** the collector stopped. Check `status`, or install the [menu bar icon](docs/menu-bar.md).
+- **The bar went dark:** check `status` first. The collector may have stopped, or it is running while the selector is on Off or Settings, or a higher-priority app owns the display. The [menu bar icon](docs/menu-bar.md) tells these apart at a glance.
 - **Token views show `?`:** ccusage is missing or failed; sessions still work. Set `ccusage` in `config.json`.
 - **`invalid choice: 'menubar'`:** you're running an older copy. `git pull --ff-only && uv sync --locked`, then use `uv run agent-deck` from the checkout.
 

@@ -4,7 +4,10 @@ Run `uv run agent-deck --version` and `uv run agent-deck status` first. Status o
 
 ## Common problems
 
-**The bar went dark.** The collector stopped and the 15-second display lease expired. Check `agent-deck status`, or install the [menu bar icon](menu-bar.md) to see why at a glance.
+**The bar went dark.** Check `agent-deck status` first; the [menu bar icon](menu-bar.md) shows the same at a glance. Three causes look alike on the bar:
+- the collector stopped, so its 15-second display lease expired (no fresh `status.json`, menu bar `xmark.circle`);
+- the collector is running but the selector is on Off or Settings, which clears the display (`"paused": true`, menu bar `pause.circle`);
+- the collector is running but a higher-priority application owns the display; Busy Crew does not raise its priority to take it back.
 
 **Token views show `?`.** `ccusage` is missing, failed, or its data is stale. It is optional: its failure affects the token views, not session monitoring. Set its absolute path as `ccusage` in `config.json` if the LaunchAgent cannot find it.
 
