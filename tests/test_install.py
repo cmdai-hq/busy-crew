@@ -350,7 +350,7 @@ class InstallationTests(unittest.TestCase):
 
     def test_installation_operations_do_not_overlap(self):
         with installer._installation_lock(self.runtime):
-            with self.assertRaisesRegex(RuntimeError, "Another Agent Deck"):
+            with self.assertRaisesRegex(RuntimeError, "Another Busy Crew"):
                 installer.install()
         self.assertFalse((self.runtime / "config.json").exists())
 

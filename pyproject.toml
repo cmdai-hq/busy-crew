@@ -1,5 +1,5 @@
 [project]
-name = "busybar-agent-deck"
+name = "busy-crew"
 version = "0.1.0"
 description = "Claude and Codex sessions on a BUSY Bar's front LED display"
 readme = "README.md"
@@ -21,6 +21,8 @@ Issues = "https://github.com/cmdai-hq/busy-crew/issues"
 Source = "https://github.com/cmdai-hq/busy-crew"
 
 [project.scripts]
+busy-crew = "agentdeck.cli:main"
+# Pre-1.0 command name, kept as an alias.
 agent-deck = "agentdeck.cli:main"
 
 [build-system]

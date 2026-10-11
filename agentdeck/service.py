@@ -227,7 +227,7 @@ class Service:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             lock.close()
-            raise SystemExit("Agent Deck is already running")
+            raise SystemExit("Busy Crew is already running")
         handler = None
         try:
             handler = configure_logging(self.runtime)

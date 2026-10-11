@@ -32,7 +32,7 @@ When both families are active, the **duo** view above shows each family's count 
 | Gray `?` | Failed turn, unknown state or unreadable source |
 | `+N` | More sessions than the six slots |
 
-Token totals are shown in K (thousand), M (million) or G (billion) and include cache tokens. These captures are real: `agent-deck snapshot --leds` on the author's bar.
+Token totals are shown in K (thousand), M (million) or G (billion) and include cache tokens. These captures are real: `uv run busy-crew snapshot --leds` on the author's bar.
 
 ## Requirements
 
@@ -47,8 +47,8 @@ Token totals are shown in K (thousand), M (million) or G (billion) and include c
 git clone https://github.com/cmdai-hq/busy-crew.git
 cd busy-crew
 uv sync --locked
-uv run agent-deck install --address http://busybar.local --timezone Europe/Paris
-uv run agent-deck status
+uv run busy-crew install --address http://busybar.local --timezone Europe/Paris
+uv run busy-crew status
 ```
 
 Use your bar's address. Your agents appear on the bar within a few seconds.
@@ -58,9 +58,9 @@ Use your bar's address. Your agents appear on the bar within a few seconds.
 
 - **A LaunchAgent** (`local.busybar.agent-deck`) starts the collector at login and restarts it if it exits. It runs this checkout's Python environment, so **keep the repository folder where it is**.
 - **Claude Code hooks**, added to Claude's settings after a private backup. They record only status identifiers and timestamps, never prompts, and never block Claude. Existing hooks and settings are preserved; a conflicting edit fails with recovery copies. Use `--no-claude-hooks` to rely on Claude's session registry alone, with coarser waiting and result detection.
-- **A private state folder**, `~/Library/Application Support/BusybarAgentDeck`, for the configuration, backups and the log.
+- **A private state folder**, `~/Library/Application Support/BusyCrew`, for the configuration, backups and the log. Installations made before 1.0 keep `BusybarAgentDeck`.
 
-Re-running `install` keeps the saved address and time zone unless you pass new ones. `uv run agent-deck uninstall` removes the LaunchAgent and the hooks, and keeps the state folder.
+Re-running `install` keeps the saved address and time zone unless you pass new ones. `uv run busy-crew uninstall` removes the LaunchAgent and the hooks, and keeps the state folder.
 </details>
 
 ## Using it
@@ -78,10 +78,10 @@ A session waiting for you always brings the sessions view back. No button answer
 The same from the terminal:
 
 ```sh
-uv run agent-deck view sessions   # or: tokens, month
-uv run agent-deck ack             # acknowledge the results on screen
-uv run agent-deck refresh         # recount tokens now
-uv run agent-deck snapshot front.png --leds
+uv run busy-crew view sessions   # or: tokens, month
+uv run busy-crew ack             # acknowledge the results on screen
+uv run busy-crew refresh         # recount tokens now
+uv run busy-crew snapshot front.png --leds
 ```
 
 A `✓` counts toward its family's total until you acknowledge it, the session starts new work, or it goes away (a closed Claude process, an archived Codex conversation, or a Codex response finished more than two hours ago). [How results and acknowledgment work](docs/how-it-works.md#results-and-acknowledgment).
@@ -101,15 +101,15 @@ A `✓` counts toward its family's total until you acknowledge it, the session s
 
 Over HTTP the key travels unencrypted: use a trusted network, or HTTPS if your device supports it. The busylib WebSocket SDK puts the key in a URL query and honors proxy environment variables; don't share those URLs or proxy logs.
 
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `AGENT_DECK_STATE` are supported; set them before installing, which pins them in the LaunchAgent and the hook command.
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `BUSY_CREW_STATE` (formerly `AGENT_DECK_STATE`, still honored) are supported; set them before installing, which pins them in the LaunchAgent and the hook command.
 
 ## Troubleshooting
 
-Start with `uv run agent-deck status`.
+Start with `uv run busy-crew status`.
 
 - **The bar went dark:** check `status` first. The collector may have stopped, or it is running while the selector is on Off or Settings, or a higher-priority app owns the display. The [menu bar icon](docs/menu-bar.md) tells these apart at a glance.
 - **Token views show `?`:** ccusage is missing or failed; sessions still work. Set `ccusage` in `config.json`.
-- **`invalid choice: 'menubar'`:** you're running an older copy. `git pull --ff-only && uv sync --locked`, then use `uv run agent-deck` from the checkout.
+- **`busy-crew` not found, or `invalid choice`:** you're running an older copy. `git pull --ff-only && uv sync --locked`, then use `uv run busy-crew` from the checkout. The pre-1.0 `agent-deck` command still works.
 
 More, including Claude settings conflicts and recovery: [troubleshooting](docs/troubleshooting.md).
 
@@ -127,8 +127,8 @@ Limits worth knowing: Codex approval requests are only partly visible, cloud tas
 ```sh
 uv sync --locked
 uv run python -m unittest discover -s tests -v
-uv run agent-deck run              # run the collector in the foreground
-uv run agent-deck demo /tmp/demo   # fictional previews of each layout
+uv run busy-crew run              # run the collector in the foreground
+uv run busy-crew demo /tmp/demo   # fictional previews of each layout
 ```
 
 The tests never contact a device, run a model or touch your real agent data. CI runs them on macOS and Linux with Python 3.11 and 3.14. Verified on BUSY Bar firmware 1.2.4 (API 27.5.0). See [CONTRIBUTING](CONTRIBUTING.md) and [SECURITY](SECURITY.md).

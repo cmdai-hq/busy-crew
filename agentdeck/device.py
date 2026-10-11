@@ -3,7 +3,7 @@ import json
 import urllib.error
 import urllib.request
 
-APPLICATION = "agent-deck"
+APPLICATION = "busy-crew"
 DEFAULT_ADDRESS = "http://busybar.local"
 MAX_RESPONSE_BYTES = 65536
 

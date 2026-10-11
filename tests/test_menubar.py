@@ -67,7 +67,7 @@ class FingerprintTests(unittest.TestCase):
             first = code_fingerprint(root)
             (root / "preview.png").write_bytes(b"png")
             self.assertEqual(code_fingerprint(root), first)
-            (root / "menubar" / "AgentDeckMenu.swift").write_text("// app\n")
+            (root / "menubar" / "BusyCrewMenu.swift").write_text("// app\n")
             second = code_fingerprint(root)
             self.assertNotEqual(second, first)
             stat = source.stat()
@@ -133,7 +133,7 @@ class MenuBarInstallTests(unittest.TestCase):
         stack.enter_context(patch.object(installer.subprocess, "run", side_effect=self.tools.run))
         stack.enter_context(patch.object(installer, "STOP_TIMEOUT", 0.5))
         stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
-        self.binary = self.runtime / "menubar" / "AgentDeckMenu"
+        self.binary = self.runtime / "menubar" / "BusyCrewMenu"
         self.plist = installer.menubar_agent_path()
         self.target = "gui/%d/%s" % (os.getuid(), installer.MENU_LABEL)
 
@@ -179,7 +179,7 @@ class MenuBarInstallTests(unittest.TestCase):
             installer.install_menubar()
         self.assertEqual(self.installed(), before)
         self.assertIn(self.target, self.tools.loaded)
-        self.assertFalse(self.binary.with_name("AgentDeckMenu.previous").exists())
+        self.assertFalse(self.binary.with_name("BusyCrewMenu.previous").exists())
 
     def test_stop_waits_while_launchd_finishes_unloading(self):
         installer.install_menubar()
@@ -202,6 +202,38 @@ class MenuBarInstallTests(unittest.TestCase):
             installer.install_menubar()
         self.assertFalse(self.plist.exists())
         self.assertFalse(self.binary.exists())
+
+    def legacy_install(self):
+        """A pre-1.0 install: same label, binary under its former name."""
+        installer.install_menubar()
+        legacy = self.binary.with_name(installer.LEGACY_MENU_BINARY)
+        os.replace(self.binary, legacy)
+        agent = plistlib.loads(self.plist.read_bytes())
+        agent["ProgramArguments"] = [str(legacy)]
+        self.plist.write_bytes(plistlib.dumps(agent))
+        return legacy
+
+    def test_upgrade_replaces_the_legacy_binary(self):
+        legacy = self.legacy_install()
+        legacy.with_name(legacy.name + ".previous").write_bytes(b"old")
+        installer.install_menubar()
+        self.assertTrue(self.binary.exists())
+        self.assertEqual(sorted(p.name for p in self.binary.parent.iterdir()), ["BusyCrewMenu"])
+        self.assertEqual(plistlib.loads(self.plist.read_bytes())["ProgramArguments"], [str(self.binary)])
+
+    def test_failed_upgrade_keeps_the_legacy_binary_its_plist_runs(self):
+        legacy = self.legacy_install()
+        before = self.plist.read_bytes()
+        self.tools.fail_bootstrap = True
+        with self.assertRaises(subprocess.CalledProcessError):
+            installer.install_menubar()
+        self.assertTrue(legacy.exists())
+        self.assertEqual(self.plist.read_bytes(), before)
+
+    def test_uninstall_removes_the_legacy_binary(self):
+        legacy = self.legacy_install()
+        installer.uninstall_menubar()
+        self.assertFalse(legacy.exists())
 
     def test_uninstall_menubar_removes_agent_plist_and_binary(self):
         installer.install_menubar()
@@ -231,7 +263,7 @@ class SwiftAppTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
-        cls.binary = Path(cls.temp.name) / "AgentDeckMenu"
+        cls.binary = Path(cls.temp.name) / "BusyCrewMenu"
         subprocess.run(["xcrun", "swiftc", *installer.SWIFT_FLAGS, "-o", str(cls.binary), str(installer.MENU_SOURCE)],
                        check=True, timeout=600)
 

@@ -23,7 +23,9 @@ LABEL = "local.busybar.agent-deck"
 MENU_LABEL = LABEL + ".menubar"
 MANIFEST = "installation.json"
 STOP_TIMEOUT = 15  # Seconds launchd may keep listing a job that is still exiting.
-MENU_SOURCE = Path(__file__).parent / "menubar" / "AgentDeckMenu.swift"
+MENU_SOURCE = Path(__file__).parent / "menubar" / "BusyCrewMenu.swift"
+# Binary name before 1.0, removed once the renamed app is in place.
+LEGACY_MENU_BINARY = "AgentDeckMenu"
 # Swift 5 mode keeps older Command Line Tools able to build the app.
 SWIFT_FLAGS = ("-swift-version", "5", "-O")
 
@@ -49,7 +51,7 @@ def _installation_lock(runtime):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise RuntimeError("Another Agent Deck installation operation is running") from exc
+            raise RuntimeError("Another Busy Crew installation operation is running") from exc
         yield
 
 
@@ -199,7 +201,7 @@ def _load_manifest(runtime):
     if not manifest:
         return {}
     if manifest.get("version") != 1 or not isinstance(manifest.get("hook_commands"), list):
-        raise ValueError("Unsupported Agent Deck installation manifest")
+        raise ValueError("Unsupported Busy Crew installation manifest")
     if any(not isinstance(command, str) for command in manifest["hook_commands"]):
         raise ValueError("Invalid hook commands in installation manifest")
     settings = manifest.get("hook_settings")
@@ -337,13 +339,13 @@ def _read_plist(path, label=LABEL):
     except (ValueError, plistlib.InvalidFileException) as exc:
         raise ValueError(f"Invalid LaunchAgent: {path}") from exc
     if not isinstance(data, dict) or data.get("Label") != label:
-        raise ValueError(f"LaunchAgent is not owned by Agent Deck: {path}")
+        raise ValueError(f"LaunchAgent is not owned by Busy Crew: {path}")
     return data
 
 
 def _preflight(address, timezone, *, imports=True):
     if sys.platform != "darwin":
-        raise RuntimeError("Agent Deck installation is supported only on macOS")
+        raise RuntimeError("Busy Crew installation is supported only on macOS")
     launchctl = shutil.which("launchctl")
     if not launchctl:
         raise RuntimeError("launchctl is unavailable")
@@ -506,7 +508,7 @@ def uninstall():
             _remove_menubar(launchctl, runtime)
         except Exception as exc:
             raise RuntimeError("Collector uninstalled, but the menu bar icon was not removed: " + str(exc)) from exc
-    print("Stopped service and removed only Agent Deck hooks. Private runtime data retained.")
+    print("Stopped service and removed only Busy Crew hooks. Private runtime data retained.")
 
 
 def _swift_compiler():
@@ -523,7 +525,7 @@ def install_menubar():
     runtime = state_dir()
     build = Path(tempfile.mkdtemp(prefix=".menubar-build-", dir=runtime))
     try:
-        built = build / "AgentDeckMenu"
+        built = build / "BusyCrewMenu"
         result = subprocess.run([xcrun, "swiftc", *SWIFT_FLAGS, "-o", str(built), str(MENU_SOURCE)],
                                 capture_output=True, text=True, timeout=600)
         if result.returncode != 0 or not built.is_file():
@@ -538,9 +540,9 @@ def install_menubar():
 def _deploy_menubar(launchctl, runtime, built):
     path = menubar_agent_path()
     plist_before = _read_bytes(path)
-    _read_plist(path, MENU_LABEL)  # Refuse to replace a plist Agent Deck does not own.
-    binary = runtime / "menubar" / "AgentDeckMenu"
-    previous = binary.with_name("AgentDeckMenu.previous")
+    _read_plist(path, MENU_LABEL)  # Refuse to replace a plist Busy Crew does not own.
+    binary = runtime / "menubar" / "BusyCrewMenu"
+    previous = binary.with_name("BusyCrewMenu.previous")
     agent = {"Label": MENU_LABEL, "ProgramArguments": [str(binary)], "RunAtLoad": True,
              # Restarted after a crash, but "Quit menu icon" (exit 0) stays closed until next login.
              "KeepAlive": {"SuccessfulExit": False}, "LimitLoadToSessionType": "Aqua",
@@ -589,6 +591,9 @@ def _deploy_menubar(launchctl, runtime, built):
             raise RuntimeError("Menu bar installation failed; rollback incomplete: " + "; ".join(errors)) from exc
         raise
     previous.unlink(missing_ok=True)
+    # The former plist pointed at the legacy binary until the swap above succeeded.
+    for name in (LEGACY_MENU_BINARY, LEGACY_MENU_BINARY + ".previous"):
+        (binary.parent / name).unlink(missing_ok=True)
 
 
 def uninstall_menubar():
@@ -608,4 +613,5 @@ def _remove_menubar(launchctl, runtime):
         if _loaded(launchctl, target):
             _stop(launchctl, target)
         _remove_preserving(path, plist_before, runtime)
-    (runtime / "menubar" / "AgentDeckMenu").unlink(missing_ok=True)
+    for name in ("BusyCrewMenu", LEGACY_MENU_BINARY):
+        (runtime / "menubar" / name).unlink(missing_ok=True)

@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -98,3 +99,35 @@ class CliTests(unittest.TestCase):
         content = (self.runtime / "service.log").read_text()
         self.assertIn("RuntimeError", content)
         self.assertNotIn("fixture-sensitive-detail", content)
+
+
+class NamingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        self.support = self.home / "Library/Application Support"
+
+    def resolve(self, **env):
+        from agentdeck.storage import state_dir
+        clean = {key: value for key, value in os.environ.items() if key not in {"BUSY_CREW_STATE", "AGENT_DECK_STATE"}}
+        with patch.dict(os.environ, {**clean, "HOME": str(self.home), **env}, clear=True):
+            return state_dir()
+
+    def test_new_installation_uses_the_busy_crew_folder(self):
+        self.assertEqual(self.resolve(), self.support / "BusyCrew")
+
+    def test_existing_installation_keeps_its_folder(self):
+        (self.support / "BusybarAgentDeck").mkdir(parents=True)
+        self.assertEqual(self.resolve(), self.support / "BusybarAgentDeck")
+        self.assertFalse((self.support / "BusyCrew").exists())
+
+    def test_busy_crew_state_wins_and_the_legacy_variable_still_works(self):
+        chosen, legacy = self.home / "chosen", self.home / "legacy"
+        self.assertEqual(self.resolve(BUSY_CREW_STATE=str(chosen), AGENT_DECK_STATE=str(legacy)), chosen)
+        self.assertEqual(self.resolve(AGENT_DECK_STATE=str(legacy)), legacy)
+
+    def test_both_command_names_are_installed(self):
+        import tomllib
+        scripts = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())["project"]["scripts"]
+        self.assertEqual(scripts, {"busy-crew": "agentdeck.cli:main", "agent-deck": "agentdeck.cli:main"})
