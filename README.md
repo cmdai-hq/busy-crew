@@ -155,7 +155,7 @@ uv run busy-crew run              # run the collector in the foreground
 uv run busy-crew demo /tmp/demo   # fictional previews of each layout
 ```
 
-The tests never contact a device, run a model or touch your real agent data. CI runs them on macOS and Linux with Python 3.11, 3.14 and 3.15. Verified on BUSY Bar firmware 1.2.4 (API 27.5.0). See [CONTRIBUTING](https://github.com/cmdai-hq/busy-crew/blob/main/CONTRIBUTING.md) and [SECURITY](https://github.com/cmdai-hq/busy-crew/blob/main/SECURITY.md).
+The tests never contact a device, run a model or touch your real agent data. CI runs them on macOS and Linux with Python 3.11, 3.14 and 3.15. Verified on BUSY Bar firmware 1.2.4 (API 27.5.0). To develop on the Mac that runs your bar, keep the Homebrew copy installed and follow [Developing on the Mac that runs your bar](https://github.com/cmdai-hq/busy-crew/blob/main/CONTRIBUTING.md#developing-on-the-mac-that-runs-your-bar). See [CONTRIBUTING](https://github.com/cmdai-hq/busy-crew/blob/main/CONTRIBUTING.md) and [SECURITY](https://github.com/cmdai-hq/busy-crew/blob/main/SECURITY.md).
 
 ## License
 

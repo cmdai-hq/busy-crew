@@ -32,6 +32,43 @@ CI tests Linux and macOS on Python 3.11, 3.14 and 3.15. Device integration and r
 LaunchAgent lifecycle checks require an explicitly chosen test device/account;
 unit tests and wheel smoke tests do not establish those results.
 
+## Developing on the Mac that runs your bar
+
+Install your everyday copy from Homebrew (or `uv tool install`), as users do,
+and develop in a separate checkout. The LaunchAgent, the hooks and the menu bar
+icon then run a released version, whatever branch the checkout is on.
+`busy-crew status` shows which copy runs (`version`, `install_mode`).
+
+Most changes need nothing installed: the unit tests, `uv run busy-crew demo …`
+for rendering, and for the menu bar app
+`AGENT_DECK_SWIFT_TESTS=1 uv run python -m unittest tests.test_menubar`.
+
+To try a branch on the real bar, pause the installed collector, run the branch
+in the foreground, then resume. Only one collector can drive the bar at a time:
+
+```sh
+launchctl bootout gui/$UID/local.busybar.agent-deck   # pause the installed collector
+uv run busy-crew run                                  # this branch, in the foreground; Ctrl-C to stop
+uv run busy-crew snapshot /tmp/front.png --leds       # from another terminal: what the bar shows
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.busybar.agent-deck.plist   # back to the installed copy
+```
+
+The foreground collector uses the same state folder and configuration, and
+reads the events of the installed hooks. A change to the hooks, the installer
+or the menu bar app needs the branch installed for a while instead:
+
+```sh
+uv run busy-crew install           # the LaunchAgent and hooks now run this checkout
+uv run busy-crew menubar install   # only for a change to the Swift app
+# … try it …
+busy-crew install && busy-crew menubar install   # back to the Homebrew copy
+```
+
+Each `install` replaces the previous copy's hooks and keeps the settings. While
+a checkout is installed, a `git switch` there changes what runs at the next
+reload: keep that checkout on the branch you are testing, and work in other
+worktrees. Changes reach the Homebrew copy only through a release.
+
 ## Releasing
 
 1. In a pull request, bump `version` in `pyproject.toml`, run `uv lock`, and
