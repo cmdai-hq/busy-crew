@@ -16,9 +16,9 @@ classifiers = [
 dependencies = ["busylib==2.6.0", "pillow==12.3.0"]
 
 [project.urls]
-Homepage = "https://github.com/tristanbes/busybar-agent-deck"
-Issues = "https://github.com/tristanbes/busybar-agent-deck/issues"
-Source = "https://github.com/tristanbes/busybar-agent-deck"
+Homepage = "https://github.com/cmdai-hq/busybar-agent-deck"
+Issues = "https://github.com/cmdai-hq/busybar-agent-deck/issues"
+Source = "https://github.com/cmdai-hq/busybar-agent-deck"
 
 [project.scripts]
 agent-deck = "agentdeck.cli:main"

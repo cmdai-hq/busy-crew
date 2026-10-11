@@ -61,7 +61,7 @@ Acknowledgment never sends anything to an agent: it doesn't answer a question or
 Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), and Claude Code and/or the Codex app with their local data. [ccusage](https://ccusage.com/) 20+ is optional for token tracking. The tested version is 20.0.26, using the `daily --by-agent` report.
 
 ```sh
-git clone https://github.com/tristanbes/busybar-agent-deck.git
+git clone https://github.com/cmdai-hq/busybar-agent-deck.git
 cd busybar-agent-deck
 uv sync --locked
 uv run agent-deck install --address http://busybar.local --timezone Europe/Paris
@@ -174,7 +174,7 @@ After updating the checkout:
 
 Run `uv run agent-deck --version` and `uv run agent-deck status` first. Status omits conversation identifiers and reports source, input and device errors separately. Check the private runtime log when the service cannot start; redact local paths and secrets before sharing diagnostics. `ccusage` is optional: its failure affects the token views, not session monitoring.
 
-`agent-deck: error: argument command: invalid choice: 'menubar'` (or `'refresh'`) means the command comes from an older checkout or from another installed copy of Agent Deck. Check that `git remote -v` points to `tristanbes/busybar-agent-deck`. Then run `git switch main && git pull --ff-only` and `uv sync --locked`, and always launch it with `uv run agent-deck …` from the checkout.
+`agent-deck: error: argument command: invalid choice: 'menubar'` (or `'refresh'`) means the command comes from an older checkout or from another installed copy of Agent Deck. Check that `git remote -v` points to `cmdai-hq/busybar-agent-deck`. Then run `git switch main && git pull --ff-only` and `uv sync --locked`, and always launch it with `uv run agent-deck …` from the checkout.
 
 If Claude settings contain invalid JSON, a symlink, or an unexpected structure, fix that file yourself before installing with hooks; the installer refuses to replace it. A fresh passive installation does not touch unrelated Claude settings. For a reported concurrent edit, close writers and inspect the private copies in the runtime's `recovery` folder. If settings are on another volume, recovery copies are kept beside them in a private `.agent-deck-recovery` folder because atomic exchange requires the same filesystem. Compare copies with the current Claude settings, then merge only the intended changes. Do not overwrite the entire file with an old backup while Claude or an editor is changing it. Re-run install after resolving the conflict. A filesystem without atomic-exchange support is refused without falling back to an unsafe replacement.
 
