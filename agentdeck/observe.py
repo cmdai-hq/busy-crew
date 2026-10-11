@@ -413,8 +413,8 @@ class Observer:
                 elif data.get("schema") != 2:
                     raise SourceError("Unsupported hook schema")
                 hooks[sid] = data
-            except (OSError, ValueError, TypeError):
-                self._error("claude")
+            except (OSError, ValueError, TypeError) as exc:
+                self._error("claude", exc)
         return hooks
 
     def claude(self):
@@ -481,8 +481,8 @@ class Observer:
                     elif state == "idle" and hook.get("turn_started_at", 0) > native_at and hook.get("state") == "working":
                         state = "working"
                 result.append(self.completion("claude", sid, state, version, completed_at, instance))
-            except (OSError, ValueError, TypeError):
-                self._error("claude")
+            except (OSError, ValueError, TypeError) as exc:
+                self._error("claude", exc)
         # An invalid file may conceal an existing session; retain its ledger for recovery.
         if "claude" not in self.errors:
             for key in list(set(self.previous) | set(self.results) | set(self.acks)):
