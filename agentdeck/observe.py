@@ -1,4 +1,6 @@
 import ctypes
+import fcntl
+import hashlib
 import json
 import math
 import os
@@ -21,6 +23,9 @@ STATES = {"working", "waiting", "ready", "idle", "unknown"}
 MAX_ROLLOUT_SCAN = 256_000_000
 MAX_RECORD = 2_000_000
 CODEX_DATABASES = ("state_5.sqlite", "thread_history_1.sqlite")
+HOOK_MAX_AGE = 86400
+HOOK_CLEANUP_INTERVAL = 3600
+HOOK_ORPHAN_GRACE = 3600
 # Events that change a turn's state (see rollout_details). Any other oversized record is left out.
 TURN_EVENTS = {"task_started", "turn_started", "task_complete", "turn_complete", "turn_aborted", "approval_request",
                "request_user_input", "approval_response", "user_message", "thread_status_changed"}
@@ -332,6 +337,7 @@ class Observer:
         self.codex_root = Path(codex_root) if codex_root is not None else codex_dir(self.home)
         self.clock, self.alive, self.started = clock, alive, clock()
         self.previous, self.instances, self.tail_cache, self.hook_cache = {}, {}, {}, {}
+        self.next_hook_cleanup = 0
         self.errors, self.state_errors = [], set()  # Ledgers that could not be read intact.
         self.causes = {}  # Provider -> why it failed, for the log; never a path or content.
         self.acks = self._load_state("acknowledged.json")
@@ -505,7 +511,7 @@ class Observer:
             except OSError as exc:
                 self._error("claude", exc)
                 continue
-            # Snapshots accumulate, one per session ever seen: only a rewritten one is read again.
+            # Only a rewritten snapshot is read again between hourly cleanup passes.
             # A hook replaces its file atomically, so every write brings a new inode.
             change = (stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
             cached = self.hook_cache.get(path.name)
@@ -519,6 +525,51 @@ class Observer:
         for name in set(self.hook_cache) - listed:
             del self.hook_cache[name]
         return hooks
+
+    def _prune_hooks(self, seen):
+        """Recheck expired snapshots under the writer's lock, without delaying a poll."""
+        now = self.clock()
+        if now < self.next_hook_cleanup:
+            return
+        self.next_hook_cleanup = now + HOOK_CLEANUP_INTERVAL
+        registry_complete = "claude" not in self.errors
+
+        def expired(snapshot):
+            age = now - snapshot["at"]
+            return age >= HOOK_MAX_AGE or (registry_complete and age >= HOOK_ORPHAN_GRACE
+                                           and "claude:" + snapshot["id"] not in seen)
+
+        directory = self.runtime / "hooks"
+        for name, (_, snapshot) in list(self.hook_cache.items()):
+            if not isinstance(snapshot, dict) or not expired(snapshot):
+                continue
+            # Only names produced by hook.main share its per-session lock.
+            key = hashlib.sha256(snapshot["id"].encode()).hexdigest()
+            if name != key + ".json":
+                continue
+            path = directory / name
+            try:
+                flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+                fd = os.open(directory / (key + ".lock"), flags, 0o600)
+                with os.fdopen(fd, "a") as lock:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        continue  # A hook is writing; reconsider it on the next cleanup pass.
+                    current = self._hook(path)
+                    if isinstance(current, Exception):
+                        self._error("claude", current)
+                        continue
+                    if current is None:
+                        self.hook_cache.pop(name, None)
+                    elif current["id"] == snapshot["id"] and expired(current):
+                        path.unlink(missing_ok=True)
+                        self.hook_cache.pop(name, None)
+                    else:
+                        self.hook_cache.pop(name, None)  # A concurrent rewrite must be read next poll.
+                    # Never unlink the lock: a waiting hook may already hold its inode open.
+            except OSError as exc:
+                self._error("claude", exc)
 
     def claude(self):
         hooks, result, seen = self._hooks(), [], set()
@@ -555,7 +606,7 @@ class Observer:
                 hook_at = hook.get("at", 0)
                 born = process_started_at(started)
                 instance_valid = hook_at >= born if born is not None else (not changed_instance or hook_at >= native_at)
-                if 0 <= self.clock() - hook_at < 86400 and instance_valid:
+                if 0 <= self.clock() - hook_at < HOOK_MAX_AGE and instance_valid:
                     if hook.get("state") == "closed" and hook_at >= native_at:
                         self._forget(key)
                         continue
@@ -591,6 +642,7 @@ class Observer:
             for key in list(set(self.previous) | set(self.results) | set(self.acks)):
                 if key.startswith("claude:") and key not in seen:
                     self._forget(key)
+        self._prune_hooks(seen)
         return result
 
     def _turn_details(self, sid, path, stat, version):

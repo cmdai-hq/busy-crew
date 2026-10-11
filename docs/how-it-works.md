@@ -64,6 +64,15 @@ Permission requests lack tool IDs in Claude's documented schema. The hook correl
 
 Hooks use isolated Python imports, store status metadata without prompts, make no approval decisions and exit with code 0. They run synchronously with a 2-second timeout and no network access.
 
+The collector checks snapshots for cleanup once an hour, starting with its first
+poll. It removes snapshots at least 24 hours old (already ignored for display),
+or at least an hour old whose session is absent from the native registry. The
+age is measured from the snapshot's last event timestamp. It rechecks each
+candidate under the hook writer's lock and skips a busy lock. Empty lock files
+are retained: deleting one could let concurrent hooks lock different inodes.
+After cleanup, a new prompt or resumed tool activity creates a new random turn
+ID, so an earlier acknowledgment cannot hide its next result.
+
 `install --no-claude-hooks` uses the native registry alone. Activity remains visible, but busy → idle does not establish a successful response or produce a `✓`. Repeat the option on manual reinstalls. For automatic upgrades and older passive installs, see [update guidance](installation.md#updates-and-removal).
 
 ### Codex app and local sessions

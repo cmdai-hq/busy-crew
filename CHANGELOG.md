@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Once an hour, remove Claude hook snapshots older than 24 hours, or at least
+  an hour old when their session has left the native registry. Recheck under
+  the hook's lock and skip active writers. Keep empty lock files so concurrent
+  hooks always synchronize on the same file.
+
 ## 1.1.3 — 2026-10-11
 
 - Clarify USB/Wi-Fi installation, configuration reloads, ccusage setup and
