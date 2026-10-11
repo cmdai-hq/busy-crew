@@ -13,6 +13,7 @@ It reads once a second while a session works or waits for you, and for 10 second
 ## Results and acknowledgment
 
 When an agent finishes a response while the monitor is running, its session shows a green `✓`. The check mark is kept across monitor restarts, so you don't miss a response that finished while you were away. It clears when any of these happens:
+
 - you acknowledge it;
 - the session starts new work;
 - the session goes away: a closed Claude process, or an archived Codex conversation;
@@ -21,11 +22,12 @@ When an agent finishes a response while the monitor is running, its session show
 A `✓` **counts toward its family's total.** For example, "Codex 5" can mean five finished conversations waiting for acknowledgment, with nothing working.
 
 To acknowledge, use any of these:
+
 - press the scroll wheel (the bar's OK / Skip);
 - choose **Acknowledge results** in the [menu bar icon](menu-bar.md);
 - run `busy-crew ack`.
 
-Only the results the bar is showing are acknowledged, so nothing is acknowledged while it shows token totals. A session that needs you brings the sessions view back even when tokens are selected, and the results then on screen can be acknowledged.
+Only results represented in Busy Crew's current frame are acknowledged, so nothing is acknowledged in a token view. A session that needs you brings the sessions frame back. Another app can cover that frame; Busy Crew does not detect screen ownership.
 
 | Result | After acknowledgment |
 | --- | --- |
@@ -33,8 +35,11 @@ Only the results the bar is showing are acknowledged, so nothing is acknowledged
 | Finished Codex conversation | Removed from the count |
 
 Acknowledgment never sends anything to an agent: it doesn't answer a question or grant a permission. It also leaves two indicators alone:
+
 - **Yellow `!`:** the agent is waiting for you. Answer it in Claude or Codex.
-- **Gray `?`:** an unknown state. A Claude `?`, for example after a failed turn, clears with the session's next activity. A failed, interrupted or cancelled Codex turn stays counted while its conversation was updated within the last two hours. A response blocked by Codex's own content filter counts as failed. That `?` disappears when you archive the conversation or send it a new message.
+- **Gray `?`:** an unknown state. A Claude `?`, for example after a failed turn, clears with the session's next activity. Failed, interrupted or cancelled Codex turns age out after two hours; archiving removes them, and new work replaces their state.
+
+A response blocked by Codex's own content filter counts as failed, not finished.
 
 At its first startup, the monitor ignores old completed responses. A transition to idle alone does not establish a successful response.
 
@@ -42,7 +47,7 @@ At its first startup, the monitor ignores old completed responses. A transition 
 
 Two token views show totals **by agent family**: today (labelled `TODAY`), and the calendar month to date, from the 1st through today (labelled `MONTH`). The month count starts again on the 1st.
 
-- Both come from a single [ccusage](https://ccusage.com/) `daily --by-agent` report, refreshed every two minutes. `busy-crew refresh`, or **Refresh tokens now** in the menu bar icon, recounts them within a couple of seconds. Only one ccusage run happens at a time: a request made while one is running joins it.
+- Both come from one [ccusage](https://ccusage.com/) `daily --by-agent` report, refreshed every two minutes. `busy-crew refresh` or **Refresh tokens now** starts a background recount at the next collector poll. A report can take up to 45 seconds; requests during a run join that run.
 - Totals use ccusage's `totalTokens`, which includes cache tokens. They are shown in K (thousand), M (million) or G (billion).
 - There is no instantaneous rate, context size or remaining subscription quota, and no cost is extrapolated for a model without known pricing.
 - A family with usage earlier in the month shows 0 for a day without any. An error, stale data, or a change of day produces a `?`.
@@ -51,21 +56,27 @@ Two token views show totals **by agent family**: today (labelled `TODAY`), and t
 
 ### Claude Code
 
-`~/.claude/sessions/*.json` provides the identity, busy/idle state, and process lifetime. The PID and its UTC start time are checked to exclude closed processes and reused PIDs. The `PermissionRequest`, `AskUserQuestion`, and `Elicitation` hooks identify waits for interaction; `PostToolUse` and `UserPromptSubmit` indicate that work has resumed. Subagents do not increase the main session count. Only sessions in the native registry are counted; CLI variants that do not appear there require another adapter.
+`~/.claude/sessions/*.json` provides identity, busy/idle state and process lifetime. The PID and UTC start time exclude closed processes and reused PIDs. Only sessions in this registry are counted; subagents do not increase the main count.
+
+`PermissionRequest`, `PreToolUse` for `AskUserQuestion`, and `Elicitation` identify waits. `PostToolUse` and `UserPromptSubmit` indicate that work has resumed. CLI variants without a native registry entry need another adapter.
 
 Permission requests lack tool IDs in Claude's documented schema. The hook correlates them with a unique preceding tool call using an input hash, storing only that hash and the call ID. Identical concurrent calls and notifications/elicitation events without a usable identity remain unknown instead of guessing which interaction was resolved. The payload contents are never persisted.
 
-The hooks run with isolated Python imports and make no decisions for Claude: they store only status/interaction identifiers and timestamps, without prompts or network access, and exit with code 0. The native session registry already provides activity data without them; `install --no-claude-hooks` keeps to that passive source.
+Hooks use isolated Python imports, store status metadata without prompts, make no approval decisions and exit with code 0. They run synchronously with a 2-second timeout and no network access.
+
+`install --no-claude-hooks` uses the native registry alone. Activity remains visible, but busy → idle does not establish a successful response or produce a `✓`. Repeat the option on manual reinstalls. For automatic upgrades and older passive installs, see [update guidance](installation.md#updates-and-removal).
 
 ### Codex app and local sessions
 
 Read-only access to `~/.codex/state_5.sqlite`, `thread_history_1.sqlite`, and rollout events. The latest turn of each user conversation is used; archived conversations and subagents are excluded.
 
+The first read finds the turn's start by scanning backward up to 256 MB. Subsequent polls read only appended records. If the start is outside that initial window, the source shows `?`.
+
 - A finished or failed conversation silent for two hours is dead and leaves the count, along with its `✓`.
 - If the rollout already contains a newer root turn than SQLite, the previous completion is cleared and the session remains unknown until the sources agree.
 - An `inProgress` turn with no local writes for 15 minutes is discarded. This avoids ghost sessions, but can also hide a very long, silent turn or an extended wait.
 - Synchronous question detection uses rollout events when available. **These files do not expose every approval request from the Codex app: yellow indicators for Codex provide only partial coverage.** An asynchronous question does not mark a still-active session as waiting.
-- A single journal line over 2 MB, such as a large tool output, is left out of the turn. A turn event that large makes the conversation unreadable, and the family shows `?`.
+- Recognized records that do not need decoding, such as tool outputs, can exceed 2 MB and are skipped. A turn event, question call or unreadable record that needs decoding and exceeds 2 MB makes the family show `?`.
 - Codex's internal databases and formats can change: a read incompatibility displays a `?` without modifying the app's data. The service log names the cause, never a path or conversation content.
 - Tasks orchestrated in the cloud and sessions on other machines are not tracked.
 

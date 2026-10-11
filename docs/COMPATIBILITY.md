@@ -1,7 +1,7 @@
 # Compatibility and distribution
 
-Busy Crew's installer supports macOS and Python 3.11+. CI covers Python 3.11
-and 3.14 on macOS and Linux using synthetic data; Linux is a test environment,
+Busy Crew's installer supports macOS and Python 3.11+. CI covers Python 3.11,
+3.14 and 3.15 on macOS and Linux using synthetic data; Linux is a test environment,
 not a supported LaunchAgent installation target.
 
 | Source | Contract used | Validation |
@@ -11,6 +11,13 @@ not a supported LaunchAgent installation target.
 | BUSY Bar | Front display API, firmware 1.2.4 / OpenAPI 27.5.0 | Earlier hardware XPM write and BGR888 readback; current cleanup regression uses mocked transport |
 | busylib | 2.6.0, pinned | Installed SDK inspected; input/reconnect behavior tested with mocks |
 | ccusage | 20.0.26 `daily --by-agent --json --offline --no-cost` | Official report shape checked and synthetic parser/process tests; optional local executable |
+
+The documentation audit on 2026-10-11 passed 254 tests on macOS/Python 3.11.13,
+including Swift compilation and menu tests. A fresh uv environment and the
+installed PyPI 1.1.2 package passed their smoke checks. No hardware was retested.
+
+Earlier observations did not record Claude Code or Codex app version numbers.
+No minimum agent version is established; their internal formats can change.
 
 Codex approval indicators are partial because not every approval is written to
 local rollouts. The monitor cannot infer missing interaction events. It monitors

@@ -4,7 +4,7 @@
   <img src="menu-bar.png" width="540" alt="Busy Crew's menu, open from the macOS menu bar">
 </p>
 
-The bar shows sessions, not the collector feeding it. When the service stops, the device lease expires after 15 seconds and the bar goes dark without saying why. This optional macOS menu bar icon shows the collector's own health, with a menu of reasons and actions.
+This optional macOS menu bar icon shows the collector's health and offers common actions. When the service stops, its 15-second display lease expires and the bar returns to its own display.
 
 ```sh
 xcode-select --install                 # once, for the Swift compiler
@@ -22,18 +22,24 @@ busy-crew menubar uninstall
 | `pause.circle` | Paused by the bar's selector |
 | The duo: a square split into two faces with two eyes each | Running |
 
-The menu shows:
-- the reasons and the start time;
-- one session count line per agent family, and today's token totals with when they were last counted;
-- the actions:
-  - **Acknowledge results**: the same as pressing the scroll wheel, enabled when there is something to acknowledge;
-  - **Refresh tokens now**: runs ccusage immediately instead of within two minutes;
-  - **Update to X**, when a newer release is out and Busy Crew came from Homebrew or `uv tool install`: runs `busy-crew upgrade`, which upgrades the package, re-runs `install` with the new version (keeping your settings and hook choice, restarting the collector) and reinstalls the menu bar app. Its output goes to `upgrade.log` in the state folder. A checkout shows the command to run instead;
-  - **Reload collector**: `launchctl kickstart -k`;
-  - **Open log**.
+**Running** describes the collector, not who owns the bar's screen. A higher-priority app can cover Busy Crew's frame without changing this icon.
+
+The menu shows health reasons, the start time, session counts and today's token totals with their last refresh time.
+
+| Action | Effect |
+| --- | --- |
+| Acknowledge results | Same as pressing the scroll wheel; enabled when results can be acknowledged |
+| Refresh tokens now | Starts a background ccusage recount; it can take up to 45 seconds |
+| Update to X | Upgrades Homebrew/uv installs, preserving settings, then refreshes the collector and menu app |
+| Reload collector | Restarts the collector and loads configuration changes |
+| Open log | Opens the private service log |
+
+Update output is saved in `upgrade.log`. A checkout shows manual update instructions instead of **Update to X**.
 
 **Quit menu icon** closes the icon until your next login. A token (`ccusage`) failure appears as a note and does not degrade the icon.
 
-The icon is cheap to run: it reads the 1.5 KB `status.json` every 5 seconds and when you open the menu. It never reads Claude or Codex data and never contacts the bar or the network: the collector checks GitHub for releases, at most once a day ([privacy](privacy.md)).
+The icon reads `status.json` every 5 seconds and when you open the menu; its size depends on the session count. The icon never reads agent sources or contacts the bar itself. Its update action launches the package manager; the collector checks GitHub for releases ([privacy](privacy.md)).
 
-After updating Busy Crew, run `busy-crew install` (it restarts the collector) and `busy-crew menubar install`. In a checkout, **Reload collector** is enough for Python-only changes; run `uv sync --locked` first if dependencies changed.
+Use `busy-crew upgrade` for package updates. For passive tracking, check the [older installation case](installation.md#updates-and-removal) first. After a manual package update, run `busy-crew install` and `busy-crew menubar install`; repeat `--no-claude-hooks` for passive tracking.
+
+In a checkout, **Reload collector** is enough for Python-only changes. Run `uv sync --locked` first if dependencies changed. See [installation and updates](installation.md#updates-and-removal).

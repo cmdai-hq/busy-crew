@@ -2,6 +2,8 @@
 
 ## 1.1.3 — 2026-10-11
 
+- Clarify USB/Wi-Fi installation, configuration reloads, ccusage setup and
+  passive-hook updates. Add a short installation guide and a contributor module map.
 - The collector costs less CPU. It reads Claude's hook snapshots again only
   when one changes: it reread every snapshot left since installation, about 160
   after a week, every second. It also slows to a read every 2.5 seconds when
