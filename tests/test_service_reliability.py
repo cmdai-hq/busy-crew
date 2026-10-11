@@ -24,7 +24,7 @@ from agentdeck.model import Session
 from agentdeck.render import Frame, compact, render, visible_sessions
 from agentdeck.service import MAX_COMMANDS_PER_POLL, MAX_EVENTS, MAX_INBOX_FILES, Service, configure_logging
 from agentdeck.storage import load_json, write_json
-from agentdeck.usage import Usage, UsageSnapshot, parse_usage, usage_output
+from agentdeck.usage import Usage, UsageSnapshot, parse_periods, parse_usage, usage_output
 
 DAY = "2026-10-04"
 
@@ -99,6 +99,30 @@ class UsageContractTests(unittest.TestCase):
         self.assertEqual(parse_usage({"daily": []}, DAY), {"claude": 0, "codex": 0})
         self.assertEqual(parse_usage({"daily": [{"period": DAY, "agents": [
             {"agent": "claude", "totalTokens": 0}]}]}, DAY), {"claude": 0})
+
+    def test_month_to_date_sums_this_month_and_counts_quiet_days_as_zero(self):
+        data = {"daily": [
+            {"period": "2026-09-30", "agents": [{"agent": "claude", "totalTokens": 1000}]},
+            {"period": "2026-10-01", "agents": [{"agent": "claude", "totalTokens": 5},
+                                                {"agent": "codex", "totalTokens": 7}]},
+            {"period": DAY, "agents": [{"agent": "claude", "totalTokens": 3}]}]}
+        self.assertEqual(parse_periods(data, DAY), ({"claude": 3, "codex": 0}, {"claude": 8, "codex": 7}))
+        self.assertEqual(parse_periods({"daily": []}, DAY), ({"claude": 0, "codex": 0}, {"claude": 0, "codex": 0}))
+
+    def test_refresh_reads_month_to_date_in_one_report(self):
+        usage = Usage(command="fixture")
+        report = json.dumps({"daily": [
+            {"period": "2026-10-01", "agents": [{"agent": "claude", "totalTokens": 5}]},
+            {"period": DAY, "agents": [{"agent": "claude", "totalTokens": 3}]}]}).encode()
+        with patch("agentdeck.usage.today", return_value=DAY), patch(
+            "agentdeck.usage.usage_output", return_value=report
+        ) as output:
+            usage.refresh()
+            state = usage.snapshot()
+        command = output.call_args.args[0]
+        self.assertEqual(command[command.index("--since") + 1], "2026-10-01")
+        self.assertEqual(command[command.index("--until") + 1], DAY)
+        self.assertEqual((state.values, state.month_values), ({"claude": 3}, {"claude": 8}))
 
     def test_malformed_schema_and_boolean_count_are_rejected(self):
         cases = [None, [], {}, {"daily": None}, {"daily": [None]},
@@ -216,6 +240,17 @@ class ServiceReliabilityTests(unittest.TestCase):
         self.service.read_commands(inbox)
         self.assertEqual(self.service.events.qsize(), MAX_EVENTS - MAX_COMMANDS_PER_POLL)
 
+    def test_start_cycles_views_and_wheel_steps_without_wrapping(self):
+        seen = []
+        for _ in range(3):
+            self.service.command("toggle")
+            seen.append(self.service.view)
+        self.assertEqual(seen, ["tokens", "month", "sessions"])
+        for command, expected in [("previous", "sessions"), ("next", "tokens"), ("next", "month"),
+                                  ("next", "month"), ("previous", "tokens")]:
+            self.service.command(command)
+            self.assertEqual(self.service.view, expected)
+
     def test_ack_only_targets_last_presented_results(self):
         previous = session(sid="presented")
         self.service.sessions = [session(sid="new")]
@@ -302,7 +337,7 @@ class ServiceReliabilityTests(unittest.TestCase):
 
     def test_status_uses_one_usage_snapshot_despite_refresh_during_draw(self):
         self.service.view = "tokens"
-        self.service.usage._state = UsageSnapshot((("claude", 10),), DAY, 1000)
+        self.service.usage._state = UsageSnapshot((("claude", 10),), DAY, 1000, month=(("claude", 40),))
         writes = []
         def draw(frame):
             self.service.usage._state = UsageSnapshot(day=DAY, at=1001, error="ccusage unavailable")
@@ -315,6 +350,7 @@ class ServiceReliabilityTests(unittest.TestCase):
         ):
             self.service.run()
         self.assertEqual(writes[0]["tokens"], {"claude": 10})
+        self.assertEqual(writes[0]["tokens_month"], {"claude": 40})
         self.assertEqual(writes[0]["tokens_at"], 1000)
         self.assertIsNone(writes[0]["tokens_error"])
         self.assertEqual(self.service.presented_sessions, [])
@@ -484,6 +520,7 @@ class PresentationContractTests(unittest.TestCase):
     def test_tokens_ack_has_no_results_unless_waiting_overrides_tokens(self):
         items = [session("claude", sid=str(i)) for i in range(7)]
         self.assertEqual(visible_sessions(items, "tokens"), [])
+        self.assertEqual(visible_sessions(items, "month"), [])
         items.append(session("claude", "waiting", "waiting"))
         shown = visible_sessions(items, "tokens")
         self.assertEqual(len(shown), 5)

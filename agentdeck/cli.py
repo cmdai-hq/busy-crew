@@ -49,7 +49,7 @@ def main():
     sub.add_parser("status")
     sub.add_parser("ack")
     sub.add_parser("refresh", help="refresh token totals now instead of within 2 minutes")
-    view = sub.add_parser("view"); view.add_argument("name", choices=["sessions", "tokens"])
+    view = sub.add_parser("view"); view.add_argument("name", choices=["sessions", "tokens", "month"])
     shot = sub.add_parser("snapshot"); shot.add_argument("path", type=Path)
     shot.add_argument("--leds", action="store_true")
     demo = sub.add_parser("demo"); demo.add_argument("directory", type=Path)

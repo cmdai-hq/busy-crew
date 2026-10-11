@@ -26,7 +26,12 @@ FONT = {
     "G": ["111", "100", "101", "101", "111"], "T": ["111", "010", "010", "010", "010"],
     "z": ["11", "01", "10", "11"],
     ".": ["0", "0", "0", "0", "1"], "-": ["000", "000", "111", "000", "000"],
+    # Letters for the token period labels.
+    "A": ["010", "101", "111", "101", "101"], "D": ["110", "101", "101", "101", "110"],
+    "H": ["101", "101", "111", "101", "101"], "N": ["1001", "1101", "1011", "1001", "1001"],
+    "O": ["010", "101", "101", "101", "010"], "Y": ["101", "101", "010", "010", "010"],
 }
+PERIODS = {"tokens": "TODAY", "month": "MONTH"}
 MARKS = {"working": ["110", "110", "001"], "waiting": ["010", "010", "000", "010"],
          "ready": ["001", "101", "010"], "unknown": FONT["?"], "idle": ["000", "111", "000"]}
 
@@ -115,7 +120,7 @@ def ordered_sessions(sessions):
 
 def visible_sessions(sessions, view="sessions", errors=()):
     """Results represented by tiles, state dots or an aggregate completion."""
-    if view == "tokens" and not any(s.state == "waiting" for s in sessions):
+    if view in PERIODS and not any(s.state == "waiting" for s in sessions):
         return []
     mode, provider = layout(sessions, errors)
     if mode == "team":
@@ -136,12 +141,15 @@ def render(sessions, view="sessions", tokens=None, phase=0, errors=()):
     claude = [s for s in sessions if s.provider == "claude"]
     sleeping = bool(claude) and "claude" not in errors and all(s.state == "idle" for s in claude)
     # Required input always takes precedence over the optional token view.
-    if view == "tokens" and not any(s.state == "waiting" for s in sessions):
+    if view in PERIODS and not any(s.state == "waiting" for s in sessions):
         for name, x in [("claude", 2), ("codex", 39)]:
-            frame.sprite(MINI_CLAWD if name == "claude" else MINI_CODEX, x, 3,
+            frame.sprite(MINI_CLAWD if name == "claude" else MINI_CODEX, x, 1,
                          "c" if name == "claude" else None)
-            frame.text(compact((tokens or {}).get(name)), x + 11, 5)
-        frame.dot(35, 5, "d"); frame.dot(35, 8, "d")
+            frame.text(compact((tokens or {}).get(name)), x + 11, 3)
+        frame.dot(35, 3, "d"); frame.dot(35, 6, "d")
+        label = PERIODS[view]
+        width = sum(len(FONT[ch][0]) + 1 for ch in label) - 1
+        frame.text(label, (72 - width) // 2, 11, "d")
     elif mode == "duo":
         for name, x in [("claude", 0), ("codex", 37)]:
             group = [s for s in sessions if s.provider == name]

@@ -24,7 +24,9 @@ MAX_EVENTS = 256
 MAX_INBOX_FILES = 128
 MAX_COMMAND_BYTES = 65536
 MAX_COMMANDS_PER_POLL = 128
-COMMANDS = {"sessions", "tokens", "toggle", "ack", "pause", "resume", "refresh"}
+# Start / Pause cycles through the views; the scroll wheel steps along them without wrapping.
+VIEWS = ["sessions", "tokens", "month"]
+COMMANDS = {*VIEWS, "toggle", "next", "previous", "ack", "pause", "resume", "refresh"}
 
 
 class PrivateRotatingHandler(RotatingFileHandler):
@@ -96,10 +98,13 @@ class Service:
     def command(self, command):
         if not isinstance(command, str) or command not in COMMANDS:
             return
-        if command in {"sessions", "tokens"}:
+        if command in VIEWS:
             self.view = command
         elif command == "toggle":
-            self.view = "tokens" if self.view == "sessions" else "sessions"
+            self.view = VIEWS[(VIEWS.index(self.view) + 1) % len(VIEWS)]
+        elif command in {"next", "previous"}:
+            step = 1 if command == "next" else -1
+            self.view = VIEWS[min(max(VIEWS.index(self.view) + step, 0), len(VIEWS) - 1)]
         elif command == "ack":
             if not self.paused and time.time() < self.presented_until and self.presented_sessions:
                 try:
@@ -172,7 +177,7 @@ class Service:
                             if isinstance(event, ButtonEvent) and event.is_press:
                                 self.enqueue({"start": "toggle", "back": "sessions", "ok": "ack"}[event.button])
                             elif isinstance(event, EncoderEvent) and event.delta:
-                                self.enqueue("tokens" if event.delta > 0 else "sessions")
+                                self.enqueue("next" if event.delta > 0 else "previous")
                             elif isinstance(event, SelectorEvent):
                                 self.enqueue("pause" if event.position in {"off", "settings"} else "resume")
             except Exception as exc:
@@ -240,8 +245,9 @@ class Service:
                 self.read_commands(inbox)
                 self.sessions = self.observer.poll()
                 usage = self.usage.snapshot()
-                tokens = usage.values
-                frame = render(self.sessions, self.view, tokens, int(time.time()) % 2, self.observer.errors)
+                tokens, month = usage.values, usage.month_values
+                frame = render(self.sessions, self.view, month if self.view == "month" else tokens,
+                               int(time.time()) % 2, self.observer.errors)
                 xpm = frame.xpm()
                 now = time.monotonic()
                 if checked_at is None:
@@ -282,7 +288,7 @@ class Service:
                 status = {
                     "at": time.time(), "sessions": [asdict(s) for s in self.sessions],
                     "layout": mode, "provider": provider, "view": self.view,
-                    "tokens": tokens, "tokens_at": usage.at, "tokens_error": usage.error,
+                    "tokens": tokens, "tokens_month": month, "tokens_at": usage.at, "tokens_error": usage.error,
                     "source_errors": self.observer.errors, "device_error": device_error,
                     "inputs_connected": self.inputs_connected, "paused": self.paused,
                     "inputs_error": self.inputs_error,
