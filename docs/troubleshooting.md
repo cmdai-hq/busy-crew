@@ -27,7 +27,7 @@ An installation failure attempts to restore the previous configuration, plist an
 
 An uninstall error means the stop was not confirmed: retain the plist/runtime files and resolve the launchctl error before retrying. Runtime backups and acknowledgment data remain after uninstall; delete that private folder yourself once you no longer need it.
 
-To move the checkout or environment, uninstall using the old environment, move it, sync dependencies, then reinstall.
+To move the checkout or environment, move it, sync dependencies, then re-run `install` from the new place: it replaces the LaunchAgent and the hooks that point at the old interpreter. Re-run `menubar install` too if you use the icon.
 
 ## Not covered by the test suite
 

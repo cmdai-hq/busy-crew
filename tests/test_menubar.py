@@ -155,6 +155,15 @@ class MenuBarInstallTests(unittest.TestCase):
         self.assertEqual(compile_call[2:5], ["-swift-version", "5", "-O"])
         self.assertEqual(list(self.runtime.glob(".menubar-build-*")), [])
 
+    def test_install_passes_the_chosen_interpreter_to_the_app(self):
+        with patch.dict(os.environ, {"BUSY_CREW_PYTHON": "/fictional/variable/python"}):
+            installer.install_menubar()
+            self.assertEqual(plistlib.loads(self.plist.read_bytes())["EnvironmentVariables"]["AGENT_DECK_PYTHON"],
+                             "/fictional/variable/python")
+            installer.install_menubar("/fictional/option/python")
+        self.assertEqual(plistlib.loads(self.plist.read_bytes())["EnvironmentVariables"]["AGENT_DECK_PYTHON"],
+                         "/fictional/option/python")
+
     def test_missing_compiler_changes_nothing(self):
         self.tools.compiler_missing = True
         with self.assertRaisesRegex(RuntimeError, "xcode-select --install"):
@@ -252,10 +261,10 @@ class MenuBarInstallTests(unittest.TestCase):
         self.assertNotIn(self.target, self.tools.loaded)
 
     def test_cli_dispatches_menubar_actions(self):
-        for action, function in [("install", "install_menubar"), ("uninstall", "uninstall_menubar")]:
+        for action, function, args in [("install", "install_menubar", (None,)), ("uninstall", "uninstall_menubar", ())]:
             with patch.object(installer, function) as called, patch.object(sys, "argv", ["agent-deck", "menubar", action]):
                 cli.main()
-            called.assert_called_once_with()
+            called.assert_called_once_with(*args)
 
 
 @unittest.skipUnless(SWIFT_TESTS, "compiles the Swift app; runs in CI or with AGENT_DECK_SWIFT_TESTS=1")

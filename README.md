@@ -56,7 +56,7 @@ Use your bar's address. Your agents appear on the bar within a few seconds.
 <details>
 <summary>What <code>install</code> changes on your Mac</summary>
 
-- **A LaunchAgent** (`local.busybar.agent-deck`) starts the collector at login and restarts it if it exits. It runs this checkout's Python environment, so **keep the repository folder where it is**.
+- **A LaunchAgent** (`local.busybar.agent-deck`) starts the collector at login and restarts it if it exits. It runs the Python that ran `install`. From a checkout, that is the checkout's environment, so **keep the repository folder where it is**. From a Homebrew package, it is the formula's `opt` path, which survives upgrades. `--python` or `BUSY_CREW_PYTHON` picks another interpreter.
 - **Claude Code hooks**, added to Claude's settings after a private backup. They record only status identifiers and timestamps, never prompts, and never block Claude. Existing hooks and settings are preserved; a conflicting edit fails with recovery copies. Use `--no-claude-hooks` to rely on Claude's session registry alone, with coarser waiting and result detection.
 - **A private state folder**, `~/Library/Application Support/BusyCrew`, for the configuration, backups and the log. Installations made before 1.0 keep `BusybarAgentDeck`.
 

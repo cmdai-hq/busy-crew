@@ -43,9 +43,12 @@ def main():
     install.add_argument("--address", help="BUSY Bar URL; preserve existing address on reinstall")
     install.add_argument("--timezone", help="IANA time zone; preserve existing zone on reinstall")
     install.add_argument("--no-claude-hooks", action="store_true")
+    python_help = "interpreter the LaunchAgents and hooks run; default: BUSY_CREW_PYTHON, else this one"
+    install.add_argument("--python", help=python_help)
     sub.add_parser("uninstall")
     menubar = sub.add_parser("menubar", help="optional macOS menu bar status icon")
     menubar.add_argument("action", choices=["install", "uninstall"])
+    menubar.add_argument("--python", help=python_help)
     sub.add_parser("status")
     sub.add_parser("ack")
     sub.add_parser("refresh", help="refresh token totals now instead of within 2 minutes")
@@ -72,14 +75,14 @@ def main():
                 handler.close()
     elif args.command == "install":
         from .install import install
-        install(args.address, args.timezone, not args.no_claude_hooks)
+        install(args.address, args.timezone, not args.no_claude_hooks, args.python)
     elif args.command == "uninstall":
         from .install import uninstall
         uninstall()
     elif args.command == "menubar":
         from .install import install_menubar, uninstall_menubar
         if args.action == "install":
-            install_menubar()
+            install_menubar(args.python)
         else:
             uninstall_menubar()
     elif args.command == "status":
