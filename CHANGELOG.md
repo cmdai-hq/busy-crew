@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.3 — 2026-10-11
 
 - The collector costs less CPU. It reads Claude's hook snapshots again only
   when one changes: it reread every snapshot left since installation, about 160
