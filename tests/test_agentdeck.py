@@ -94,6 +94,7 @@ class RenderingTests(unittest.TestCase):
     def test_waiting_overrides_token_view(self):
         items = [session("claude", "waiting")]
         self.assertEqual(render(items, "tokens", {"claude": 999}).rgb(), render(items).rgb())
+        self.assertEqual(render(items, "month", {"claude": 999}).rgb(), render(items).rgb())
 
     def test_waiting_is_visible_before_overflow(self):
         items = [session("codex", sid=str(i)) for i in range(10)] + [session("codex", "waiting", "z")]
@@ -121,6 +122,12 @@ class RenderingTests(unittest.TestCase):
             self.assertEqual(len(xpm[2+colors:]), 16)
             self.assertTrue(all(len(row) == 72 for row in xpm[2+colors:]))
             self.assertEqual(len(frame.rgb()), 3456)
+
+    def test_token_views_name_their_period(self):
+        today, month = render([], "tokens", {"claude": 1}), render([], "month", {"claude": 1})
+        self.assertNotEqual(today.rgb(), month.rgb())
+        self.assertEqual(today.rows[:10], month.rows[:10])  # Same totals, only the label differs.
+        self.assertTrue(any(v != "." for v in month.rows[13]))
 
     def test_tokens_unknown_and_compact_numbers(self):
         self.assertEqual(compact(None), "?")

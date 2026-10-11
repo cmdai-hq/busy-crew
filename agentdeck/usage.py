@@ -16,11 +16,14 @@ def today(timezone):
     return datetime.now(ZoneInfo(timezone)).strftime("%Y-%m-%d")
 
 
-def parse_usage(data, day):
-    """Read ccusage's unified daily schema; incompatible reports are unknown."""
+def parse_periods(data, day):
+    """Read ccusage's unified daily schema into (today, month to date) totals.
+
+    Incompatible reports are unknown. A family seen anywhere in the report has an
+    available source, so its days without usage count as zero."""
     if not isinstance(data, dict) or not isinstance(data.get("daily"), list):
         raise ValueError("Invalid ccusage daily report")
-    values = {}
+    today_values, month_values = {}, {}
     for row in data["daily"]:
         if not isinstance(row, dict) or not isinstance(row.get("period"), str):
             raise ValueError("Invalid ccusage daily row")
@@ -37,11 +40,21 @@ def parse_usage(data, day):
             name, count = agent["agent"], agent.get("totalTokens")
             if type(count) is not int or count < 0:
                 raise ValueError("Invalid ccusage token count")
-            if row["period"] == day and name in {"claude", "codex"}:
-                values[name] = values.get(name, 0) + count
+            if name not in {"claude", "codex"} or not day[:8] <= row["period"] <= day:
+                continue
+            month_values[name] = month_values.get(name, 0) + count
+            today_values.setdefault(name, 0)
+            if row["period"] == day:
+                today_values[name] += count
     # A valid empty daily report establishes no usage; an absent agent in a
     # nonempty report does not establish that its data source was available.
-    return values if data["daily"] else {"claude": 0, "codex": 0}
+    if not data["daily"]:
+        return {"claude": 0, "codex": 0}, {"claude": 0, "codex": 0}
+    return today_values, month_values
+
+
+def parse_usage(data, day):
+    return parse_periods(data, day)[0]
 
 
 def usage_output(command, timeout=45, max_bytes=MAX_USAGE_BYTES):
@@ -83,10 +96,15 @@ class UsageSnapshot:
     day: str | None = None
     at: float = 0
     error: str | None = None
+    month: tuple = ()  # Calendar month to date, including today.
 
     @property
     def values(self):
         return dict(self.totals)
+
+    @property
+    def month_values(self):
+        return dict(self.month)
 
 
 class Usage:
@@ -148,10 +166,11 @@ class Usage:
             day = today(self.timezone)
             if not self.command:
                 raise FileNotFoundError("ccusage")
-            output = usage_output([self.command, "daily", "--since", day, "--until", day,
+            # One daily report from the 1st covers both today and the month to date.
+            output = usage_output([self.command, "daily", "--since", day[:8] + "01", "--until", day,
                 "--timezone", self.timezone, "--json", "--by-agent", "--offline", "--no-cost"])
-            values = parse_usage(json.loads(output), day)
-            state = UsageSnapshot(tuple(values.items()), day, time.time())
+            values, month = parse_periods(json.loads(output), day)
+            state = UsageSnapshot(tuple(values.items()), day, time.time(), month=tuple(month.items()))
         except (OSError, ValueError, TypeError, subprocess.SubprocessError):
             self.unavailable()
             return
@@ -166,7 +185,7 @@ class Usage:
         except Exception:
             fresh = False
         if not fresh:
-            return replace(state, totals=())
+            return replace(state, totals=(), month=())
         return state
 
     def current(self):

@@ -91,23 +91,24 @@ Backups and local files are kept in `~/Library/Application Support/BusybarAgentD
 
 | Control | Action |
 | --- | --- |
-| **Start / Pause** button | Toggle between sessions and tokens; it never acknowledges |
-| Turn the scroll wheel toward + / toward − | Tokens / sessions |
-| **Press the scroll wheel** (the bar's OK / Skip) | Acknowledge visible completion indicators; no acknowledgment from the tokens view |
+| **Start / Pause** button | Cycle through sessions → today's tokens → this month's tokens → sessions; it never acknowledges |
+| Turn the scroll wheel toward + / toward − | One step along sessions → today → month, stopping at either end |
+| **Press the scroll wheel** (the bar's OK / Skip) | Acknowledge visible completion indicators; no acknowledgment from a token view |
 | **Back** button | Return to sessions |
 | Selector set to Off or Settings | Pause the Agent Deck display |
 
 BUSY's documentation describes Start / Pause as "also OK", but the bar reports that button as `start`. Only a press on the scroll wheel reaches Agent Deck as OK.
 
-When interaction is required, the sessions view stays on screen even if the tokens view was selected. No button grants a permission or sends a reply to an agent.
+When interaction is required, the sessions view stays on screen even if a token view was selected. No button grants a permission or sends a reply to an agent.
 
 The same controls are available from the terminal:
 
 ```sh
-uv run agent-deck view tokens
+uv run agent-deck view tokens     # today
+uv run agent-deck view month      # this month
 uv run agent-deck view sessions
 uv run agent-deck ack
-uv run agent-deck refresh     # recount today's tokens now
+uv run agent-deck refresh         # recount the tokens now
 uv run agent-deck snapshot front.png --leds
 ```
 
@@ -115,7 +116,7 @@ uv run agent-deck snapshot front.png --leds
 
 ## Tokens
 
-The tokens view shows today's totals **by agent family**, refreshed every two minutes and displayed in K or M. `agent-deck refresh`, or **Refresh tokens now** in the menu bar icon, recounts them within a couple of seconds. Only one ccusage run happens at a time: a request made while one is running joins it. It uses ccusage's `totalTokens`, including cache tokens as reported by that tool. It does not show an instantaneous rate, context size, or remaining subscription quota. No cost is extrapolated for a model without known pricing. An error, stale data, or a change of day produces a `?`.
+Two token views show totals **by agent family**: today (labelled `TODAY` at the bottom), and the calendar month to date, from the 1st through today (labelled `MONTH`). Both are refreshed every two minutes from a single ccusage report and displayed in K, M or G; the month count starts again on the 1st. `agent-deck refresh`, or **Refresh tokens now** in the menu bar icon, recounts them within a couple of seconds. Only one ccusage run happens at a time: a request made while one is running joins it. It uses ccusage's `totalTokens`, including cache tokens as reported by that tool. It does not show an instantaneous rate, context size, or remaining subscription quota. No cost is extrapolated for a model without known pricing. A family with usage earlier in the month shows 0 for a day without any. An error, stale data, or a change of day produces a `?`.
 
 ## Tracking sources and limitations
 
@@ -170,7 +171,7 @@ After updating the checkout:
 
 ## Troubleshooting and recovery
 
-Run `uv run agent-deck --version` and `uv run agent-deck status` first. Status omits conversation identifiers and reports source, input and device errors separately. Check the private runtime log when the service cannot start; redact local paths and secrets before sharing diagnostics. `ccusage` is optional: its failure affects the tokens view, not session monitoring.
+Run `uv run agent-deck --version` and `uv run agent-deck status` first. Status omits conversation identifiers and reports source, input and device errors separately. Check the private runtime log when the service cannot start; redact local paths and secrets before sharing diagnostics. `ccusage` is optional: its failure affects the token views, not session monitoring.
 
 `agent-deck: error: argument command: invalid choice: 'menubar'` (or `'refresh'`) means the command comes from an older checkout or from another installed copy of Agent Deck. Check that `git remote -v` points to `tristanbes/busybar-agent-deck`. Then run `git switch main && git pull --ff-only` and `uv sync --locked`, and always launch it with `uv run agent-deck …` from the checkout.
 
