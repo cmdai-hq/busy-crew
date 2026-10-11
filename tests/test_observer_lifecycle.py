@@ -699,6 +699,14 @@ class LifecycleTests(unittest.TestCase):
         rescan.assert_not_called()
         self.assertEqual(extend.call_count, 2)  # Unchanged files are not read again.
 
+    def test_appended_blank_lines_are_skipped(self):
+        self.codex_fixture([event("task_started", turn_id="turn")])
+        self.assertEqual(self.observer.poll()[0].state, "working")
+        with self.rollout.open("a") as stream:
+            stream.write("\n\n" + json.dumps(function("function_call", name="request_user_input", call_id="q")) + "\n\n")
+        self.assertEqual(self.observer.poll()[0].state, "waiting")
+        self.assertEqual(self.observer.errors, [])
+
     def test_appended_oversized_records_follow_the_backward_rules(self):
         path = self.root / "rollout"
         start = json.dumps(event("task_started", turn_id="turn")) + "\n"

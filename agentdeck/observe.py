@@ -262,6 +262,8 @@ def extend_turn(path, start):
                 if skipping:
                     # The newline that ends an oversized record: only its start, kept, says what it was.
                     skipping, record = False, oversized_record(head)
+                elif not line:  # Skipped, as when reading backwards.
+                    continue
                 elif len(line) > MAX_RECORD:
                     record = oversized_record(line[:4096])
                 else:
