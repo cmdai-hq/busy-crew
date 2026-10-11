@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 — 2026-10-11
 
 - The menu bar icon is now the duo: a rounded square split into Claude's and
-  Codex's faces. Run `busy-crew menubar install` to get it.
+  Codex's faces. **Update to 1.1.1** in the menu installs it; after a manual
+  `brew upgrade` or `uv tool upgrade`, run `busy-crew menubar install`.
+- CONTRIBUTING explains how to develop on the Mac that runs your bar, with the
+  everyday copy installed from Homebrew.
 
 ## 1.1.0 — 2026-10-11
 
