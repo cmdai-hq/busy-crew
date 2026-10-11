@@ -167,6 +167,59 @@ class HookCleanupTests(unittest.TestCase):
         self.assertFalse(expired.exists())
         self.assertEqual(self.observer.errors, ["claude"])
 
+    def test_disappeared_registry_still_allows_age_expiry(self):
+        """A previously available registry cannot block expiry or prove orphanhood."""
+        self.native("live")
+        self.observer.poll()
+        sessions = self.claude / "sessions"
+        (sessions / "live.json").unlink()
+        sessions.rmdir()
+        expired = self.emit("expired", self.now - 86401)
+        orphan = self.emit("orphan", self.now - 7200)
+        self.now += 3600
+        self.assertEqual(self.observer.poll(), [])
+        self.assertFalse(expired.exists())
+        self.assertTrue(orphan.exists())
+        self.assertIn("claude:live", self.observer.previous)
+        self.assertEqual(self.observer.errors, ["claude"])
+        self.assertEqual(self.observer.error_summary(), "claude (Previously available source is absent)")
+        self.native("live")
+        self.assertEqual(self.observer.poll()[0].state, "working")
+        self.assertFalse(self.observer.errors)
+
+    def test_registry_enumeration_failure_still_allows_age_expiry(self):
+        """Unreadable registry directories disable absence decisions, not age expiry."""
+        self.native("live")
+        expired = self.emit("expired", self.now - 86401)
+        orphan = self.emit("orphan", self.now - 7200)
+        iterdir = Path.iterdir
+
+        def unreadable(path):
+            """Simulate registry permissions without changing fixture filesystem access."""
+            if path == self.claude / "sessions":
+                raise PermissionError
+            return iterdir(path)
+
+        with patch.object(Path, "iterdir", unreadable):
+            self.assertEqual(self.observer.poll(), [])
+        self.assertFalse(expired.exists())
+        self.assertTrue(orphan.exists())
+        self.assertEqual(self.observer.errors, ["claude"])
+        self.assertEqual(self.observer.error_summary(), "claude (PermissionError)")
+        self.assertNotIn(expired.name, self.observer.hook_cache)
+
+    def test_incompatible_registry_still_allows_age_expiry(self):
+        """A file in place of the registry stays an error while expired hooks are pruned."""
+        self.claude.mkdir()
+        (self.claude / "sessions").write_text("not a directory")
+        expired = self.emit("expired", self.now - 86401)
+        orphan = self.emit("orphan", self.now - 7200)
+        self.assertEqual(self.observer.poll(), [])
+        self.assertFalse(expired.exists())
+        self.assertTrue(orphan.exists())
+        self.assertEqual(self.observer.errors, ["claude"])
+        self.assertEqual(self.observer.error_summary(), "claude (Source directory incompatible)")
+
     def test_unreadable_snapshot_is_retained_and_reported(self):
         """Snapshot corruption remains visible and never proves eligibility to delete."""
         broken = self.emit("broken", self.now - 86401)

@@ -578,7 +578,12 @@ class Observer:
     def claude(self):
         """Reconcile native sessions with hooks, then prune using registry completeness."""
         hooks, result, seen = self._hooks(), [], set()
-        files = self._files(self.claude_root / "sessions", "claude")
+        try:
+            files = self._files(self.claude_root / "sessions", "claude")
+        except (OSError, ValueError, TypeError) as exc:
+            self._error("claude", exc)
+            self._prune_hooks(seen, registry_complete=False)
+            return result  # Preserve session ledgers while the source is unavailable.
         registry_complete = True  # Hook errors cannot conceal native registry entries.
         for path in files:
             try:

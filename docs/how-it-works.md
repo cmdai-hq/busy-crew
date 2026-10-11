@@ -70,6 +70,8 @@ or older than an hour whose session is absent from the native registry. The
 age is measured from the snapshot's last event timestamp. It rechecks each
 candidate under the hook writer's lock and skips a busy lock. Empty lock files
 are retained: deleting one could let concurrent hooks lock different inodes.
+An unavailable or incompatible registry directory remains a source error and
+disables absence-based deletion, while cleanup by maximum age still runs.
 After cleanup, a new prompt or resumed tool activity creates a new random turn
 ID, so an earlier acknowledgment cannot hide its next result.
 

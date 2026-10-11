@@ -52,7 +52,8 @@ While running, the collector checks hook snapshots once an hour. It deletes
 those older than 24 hours, and those older than an hour whose session is
 absent from Claude's native registry. Unreadable snapshots are retained and
 reported as a source error; an unreadable registry prevents deletion based on
-absence. A hook currently writing is skipped until a later check. Empty lock
+absence. Age-based cleanup continues even when the registry directory disappears
+or cannot be read. A hook currently writing is skipped until a later check. Empty lock
 files remain after their snapshots are deleted.
 
 `uninstall` keeps this folder so you can recover a backup; delete it yourself when you no longer need it.
