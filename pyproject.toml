@@ -1,6 +1,6 @@
 [project]
 name = "busy-crew"
-version = "1.1.0"
+version = "1.1.1"
 description = "Claude and Codex sessions on a BUSY Bar's front LED display"
 readme = "README.md"
 license = "MIT"
