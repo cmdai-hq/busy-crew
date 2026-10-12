@@ -743,6 +743,39 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(len(fed), 30)
         self.assertNotIn("records", self.observer.tail_cache["c"])
 
+    def test_repeated_selected_boundary_matches_fresh_backward_scan(self):
+        path = self.root / "repeated-turn"
+        initial = event("task_started", turn_id="turn")
+        for prior in (event("approval_request"), event("task_complete", turn_id="turn", completed_at=self.now),
+                      event("turn_aborted", turn_id="turn"), event("task_started", turn_id="next")):
+            with self.subTest(prior=prior):
+                self.observer.tail_cache.clear()
+                path.write_text(json.dumps(initial) + "\n" + json.dumps(prior) + "\n")
+                self.observer._turn_details("synthetic", path, path.stat(), "turn")
+                # Two matching starts in one append: only the last start wins.
+                appended = [event("task_started", turn_id="turn"), event("approval_request"),
+                            event("turn_started", turn_id="turn"),
+                            event("thread_status_changed", active_flags=[])]
+                with path.open("a") as stream:
+                    stream.write("".join(json.dumps(record) + "\n" for record in appended))
+                actual = self.observer._turn_details("synthetic", path, path.stat(), "turn")
+                records, _ = read_turn_tail(path, "turn")
+                self.assertEqual(actual, observe.rollout_details(records, "turn"))
+                self.assertEqual(actual, {"terminal": None, "waiting": False, "completed_at": 0,
+                                          "boundary": True, "superseded": False})
+
+    def test_missing_boundary_uses_last_matching_start_among_appends(self):
+        path = self.root / "missing-repeated-turn"
+        path.write_text(json.dumps(event("approval_request")) + "\n")
+        self.assertIsInstance(self.observer._turn_details("synthetic", path, path.stat(), "turn"), ValueError)
+        with path.open("a") as stream:
+            for record in [event("task_started", turn_id="turn"), event("approval_request"),
+                           event("turn_started", turn_id="turn")]:
+                stream.write(json.dumps(record) + "\n")
+        records, _ = read_turn_tail(path, "turn")
+        self.assertEqual(self.observer._turn_details("synthetic", path, path.stat(), "turn"),
+                         observe.rollout_details(records, "turn"))
+
     def test_incremental_details_match_full_scan_at_arbitrary_byte_splits(self):
         records = [event("task_started", turn_id="turn"),
                    function("function_call", name="request_user_input", call_id="q"),

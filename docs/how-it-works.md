@@ -94,6 +94,8 @@ The collector also folds only the new complete records into a resumable state;
 it does not retain or replay the turn's event history. A changed turn ID, file
 replacement, truncation or same-size rewrite triggers a fresh backward scan.
 An invalid append discards the fold and retries a full scan after the next change.
+A later start carrying the same selected turn ID resets the fold at its last
+matching boundary, just like a fresh backward scan.
 
 - A finished or failed conversation silent for two hours is dead and leaves the count, along with its `✓`.
 - If the rollout already contains a newer root turn than SQLite, the previous completion is cleared and the session remains unknown until the sources agree.

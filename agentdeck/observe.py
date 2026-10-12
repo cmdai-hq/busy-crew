@@ -703,11 +703,14 @@ class Observer:
             if cached and cached["identity"] == identity and cached["end"] is not None and stat.st_size > cached["change"][1]:
                 records, end = extend_turn(path, cached["end"])
                 details = cached["details"]
-                if details is None:  # Still waiting for the selected turn's start.
-                    start = next((index for index, record in enumerate(records) if is_boundary(record, version)), None)
-                    records = [] if start is None else records[start:]
-                    if start is not None:
-                        details = RolloutDetails(version)
+                # A full backward scan selects the last matching boundary, even
+                # when Codex repeats the selected ID. Drop earlier wait/terminal state.
+                start = next((index for index in range(len(records) - 1, -1, -1)
+                              if is_boundary(records[index], version)), None)
+                if start is not None:
+                    records, details = records[start:], RolloutDetails(version)
+                elif details is None:  # Still waiting for the selected turn's start.
+                    records = []
             else:
                 records, end = read_turn_tail(path, version)
                 details = None if records is None else RolloutDetails(version)

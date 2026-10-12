@@ -353,6 +353,42 @@ class SwiftAppTests(unittest.TestCase):
         cls.binary = Path(cls.temp.name) / "BusyCrewMenu"
         subprocess.run(["xcrun", "swiftc", *installer.SWIFT_FLAGS, "-o", str(cls.binary), str(installer.MENU_SOURCE)],
                        check=True, timeout=600)
+        # Exercise the real delegate with a synthetic state folder and a fake
+        # interpreter. The lazy status item keeps this harness off the menu bar.
+        harness = Path(cls.temp.name) / "main.swift"
+        source = installer.MENU_SOURCE.read_text().split("let arguments = CommandLine.arguments")[0]
+        harness.write_text(source + '''
+let delegate = AppDelegate()
+delegate.menu.autoenablesItems = false
+let item = NSMenuItem(title: "Acknowledge results", action: #selector(AppDelegate.acknowledge), keyEquivalent: "")
+item.isEnabled = true
+delegate.menu.addItem(item)
+delegate.loadSnapshot()
+if CommandLine.arguments[1] == "tracking" {
+    print("fresh: \\(item.isEnabled)")
+    delegate.menuWillOpen(delegate.menu)
+    let url = delegate.stateDir.appendingPathComponent("status.json")
+    var status = try! JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+    status["at"] = Date().timeIntervalSince1970 - 6
+    try! JSONSerialization.data(withJSONObject: status).write(to: url)
+    _ = NSApplication.shared
+    let deadline = Date().addingTimeInterval(1.2)
+    while item.isEnabled && Date() < deadline {
+        RunLoop.main.run(mode: .eventTracking, before: deadline)
+    }
+    print("expired: \\(item.isEnabled)")
+    delegate.menuDidClose(delegate.menu)
+    print("timer cleared: \\(delegate.menuTimer == nil)")
+} else {
+    delegate.acknowledge()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+    let marker = delegate.stateDir.appendingPathComponent("ack-dispatched")
+    print("dispatched: \\(FileManager.default.fileExists(atPath: marker.path))")
+}
+''')
+        cls.control_binary = Path(cls.temp.name) / "MenuControlTests"
+        subprocess.run(["xcrun", "swiftc", *installer.SWIFT_FLAGS, "-o", str(cls.control_binary), str(harness)],
+                       check=True, timeout=600)
 
     @classmethod
     def tearDownClass(cls):
@@ -396,6 +432,29 @@ class SwiftAppTests(unittest.TestCase):
             with self.subTest(age=age):
                 self.assertIn("[ ] Acknowledge results", self.menu(dict(status, at=time.time() - age)))
         self.assertIn("[x] Acknowledge results", self.menu(dict(status, at=time.time() - 2)))
+
+    def control(self, mode, age):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "status.json").write_text(json.dumps({"at": time.time() - age, "sessions": [],
+                "health": {"level": "ok", "reasons": []}, "acknowledgeable": 1}))
+            interpreter = root / "fake-python"
+            interpreter.write_text('#!/bin/sh\ntouch "$AGENT_DECK_STATE/ack-dispatched"\n')
+            interpreter.chmod(0o700)
+            env = dict(os.environ, AGENT_DECK_STATE=str(root), AGENT_DECK_PYTHON=str(interpreter))
+            result = subprocess.run([str(self.control_binary), mode], capture_output=True, text=True, timeout=10, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.splitlines()
+
+    def test_open_menu_refreshes_existing_acknowledge_item(self):
+        self.assertEqual(self.control("tracking", age=0),
+                         ["fresh: true", "expired: false", "timer cleared: true"])
+
+    def test_acknowledge_action_rechecks_status_before_launching(self):
+        for age in (6, -2, 20):
+            with self.subTest(age=age):
+                self.assertEqual(self.control("action", age), ["dispatched: false"])
+        self.assertEqual(self.control("action", age=0), ["dispatched: true"])
 
     def test_swift_change_survives_collector_reload(self):
         status = {"at": time.time(), "sessions": [], "health": {"level": "ok", "reasons": []},

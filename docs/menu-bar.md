@@ -38,7 +38,7 @@ Update output is saved in `upgrade.log`. A checkout shows manual update instruct
 
 **Quit menu icon** closes the icon until your next login. A token (`ccusage`) failure appears as a note and does not degrade the icon.
 
-The icon reads `status.json` every 5 seconds and when you open the menu; its size depends on the session count. The icon never reads agent sources or contacts the bar itself. Its update action launches the package manager; the collector checks GitHub for releases ([privacy](privacy.md)).
+The icon reads `status.json` every 5 seconds and when you open the menu; its size depends on the session count. While the menu stays open, acknowledgment availability refreshes once a second in AppKit's tracking mode. Clicking Acknowledge also rechecks freshness and the displayed result count before launching the command. The icon never reads agent sources or contacts the bar itself. Its update action launches the package manager; the collector checks GitHub for releases ([privacy](privacy.md)).
 
 Use `busy-crew upgrade` for package updates. For passive tracking, check the [older installation case](installation.md#updates-and-removal) first. After a manual package update, run `busy-crew install` and `busy-crew menubar install`; repeat `--no-claude-hooks` for passive tracking.
 

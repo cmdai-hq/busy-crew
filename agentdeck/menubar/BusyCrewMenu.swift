@@ -220,12 +220,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ? legacy : NSString(string: "~/Library/Application Support/BusyCrew").expandingTildeInPath
     }())
     lazy var serviceLabel = environment["AGENT_DECK_LABEL"] ?? "local.busybar.agent-deck"
-    let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    lazy var statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let menu = NSMenu()
     var snapshot = Snapshot()
     var lastError: String?
     var updating = false
     var timer: Timer?
+    var menuTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         menu.delegate = self
@@ -242,8 +243,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func tick() { refresh() }
 
-    func refresh() {
+    func loadSnapshot() {
         snapshot = Snapshot.load(stateDir.appendingPathComponent("status.json"), now: Date().timeIntervalSince1970)
+        // menuNeedsUpdate only rebuilds items when tracking begins. Refresh the
+        // existing action too, while AppKit keeps the menu open.
+        for item in menu.items where item.action == #selector(acknowledge) {
+            item.isEnabled = snapshot.level != "stopped" && snapshot.canAcknowledge && snapshot.acknowledgeable > 0
+        }
+    }
+
+    func refresh() {
+        loadSnapshot()
         let title = "Busy Crew: " + (levelTitles[snapshot.level] ?? snapshot.level)
         if let image = icon(for: snapshot.level) {
             statusItem.button?.image = image
@@ -254,6 +264,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         statusItem.button?.toolTip = title
         statusItem.button?.setAccessibilityLabel(title)
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        menuTimer?.invalidate()
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.loadSnapshot() }
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .eventTracking)
+        menuTimer = timer
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        menuTimer?.invalidate()
+        menuTimer = nil
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -272,6 +295,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func acknowledge() {
+        loadSnapshot()
+        guard snapshot.level != "stopped", snapshot.canAcknowledge, snapshot.acknowledgeable > 0 else { return }
         guard let python = environment["AGENT_DECK_PYTHON"] else {
             lastError = "Last action failed: Acknowledge results (no interpreter configured)"
             return
