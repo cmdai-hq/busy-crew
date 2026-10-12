@@ -449,6 +449,28 @@ class ServiceReliabilityTests(unittest.TestCase):
             self.service.run()
         self.assertEqual([status["code_changed"] for status in writes], [False, False])
 
+    def test_swift_change_publishes_menu_fingerprint_without_collector_reload(self):
+        from agentdeck.health import menu_fingerprint
+        package = self.runtime / "package"
+        menu = package / "menubar" / "BusyCrewMenu.swift"
+        menu.parent.mkdir(parents=True)
+        menu.write_text("// old menu")
+        before = menu_fingerprint(package)
+        self.service.package_root = package
+        def draw(frame):
+            if self.service.device.draw.call_count == 1:
+                menu.write_text("// updated menu")
+            else:
+                self.service.stop.set()
+        self.service.device.draw.side_effect = draw
+        clock, writes = iter([0, 31]), []
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.time.monotonic", side_effect=lambda: next(clock, 31)
+        ), patch("agentdeck.service.write_json", side_effect=lambda path, data, **_: writes.append(data)):
+            self.service.run()
+        self.assertEqual([s["menu_fingerprint"] for s in writes], [before, menu_fingerprint(package)])
+        self.assertEqual([s["code_changed"] for s in writes], [False, False])
+
     def test_status_counts_only_results_the_bar_can_acknowledge(self):
         # OK acknowledges what the bar shows: nothing from the tokens view.
         self.service.observer = SimpleNamespace(poll=lambda: [session()], errors=[], acknowledge=MagicMock(),

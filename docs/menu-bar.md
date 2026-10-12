@@ -16,9 +16,9 @@ busy-crew menubar uninstall
 
 | Icon | Meaning |
 | --- | --- |
-| `xmark.circle` | Stopped: no fresh `status.json` (missing, invalid, or older than 10 s) |
+| `xmark.circle` | Stopped: no fresh `status.json` (missing, invalid, in the future, or older than 10 s) |
 | `exclamationmark.triangle` | Degraded: the bar is unreachable, a source cannot be read, or the bar's buttons are disconnected |
-| `arrow.clockwise.circle` | Update available: a newer release is out, the collector's code changed on disk since it started, or the running collector predates health reporting |
+| `arrow.clockwise.circle` | Update available: a newer release is out, the collector or menu source changed on disk, or the running collector predates health reporting |
 | `pause.circle` | Paused by the bar's selector |
 | The duo: a square split into two faces with two eyes each | Running |
 
@@ -28,7 +28,7 @@ The menu shows health reasons, the start time, session counts and today's token 
 
 | Action | Effect |
 | --- | --- |
-| Acknowledge results | Same as pressing the scroll wheel; enabled when results can be acknowledged |
+| Acknowledge results | Same as pressing the scroll wheel; enabled when results can be acknowledged and status is at most 5 seconds old |
 | Refresh tokens now | Starts a background ccusage recount; it can take up to 45 seconds |
 | Update to X | Upgrades Homebrew/uv installs, preserving settings, then refreshes the collector and menu app |
 | Reload collector | Restarts the collector and loads configuration changes |
@@ -38,8 +38,14 @@ Update output is saved in `upgrade.log`. A checkout shows manual update instruct
 
 **Quit menu icon** closes the icon until your next login. A token (`ccusage`) failure appears as a note and does not degrade the icon.
 
-The icon reads `status.json` every 5 seconds and when you open the menu; its size depends on the session count. The icon never reads agent sources or contacts the bar itself. Its update action launches the package manager; the collector checks GitHub for releases ([privacy](privacy.md)).
+The icon reads `status.json` every 5 seconds and when you open the menu; its size depends on the session count. While the menu stays open, acknowledgment availability refreshes once a second in AppKit's tracking mode. Clicking Acknowledge also rechecks freshness and the displayed result count before launching the command. The icon never reads agent sources or contacts the bar itself. Its update action launches the package manager; the collector checks GitHub for releases ([privacy](privacy.md)).
 
 Use `busy-crew upgrade` for package updates. For passive tracking, check the [older installation case](installation.md#updates-and-removal) first. After a manual package update, run `busy-crew install` and `busy-crew menubar install`; repeat `--no-claude-hooks` for passive tracking.
 
 In a checkout, **Reload collector** is enough for Python-only changes. Run `uv sync --locked` first if dependencies changed. See [installation and updates](installation.md#updates-and-removal).
+
+A Swift-only change shows **Menu app changed — run `busy-crew menubar install`**.
+The installed menu app keeps its source fingerprint in its LaunchAgent environment
+and compares it with the collector's current source fingerprint. Reloading the
+collector leaves this notice visible; reinstalling the menu app clears it.
+Menu apps installed before this fingerprint was added also need one reinstall.

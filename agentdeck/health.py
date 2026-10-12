@@ -1,4 +1,5 @@
 """Collector health published in status.json for the optional menu bar icon."""
+import hashlib
 from pathlib import Path
 
 INPUTS_GRACE = 10  # The button WebSocket connects shortly after start.
@@ -24,10 +25,10 @@ def health(status, now, started_at):
 
 
 def code_fingerprint(root):
-    """Identity of the code a running service loaded; any edit, addition or removal changes it."""
+    """Identity of Python code loaded by the collector; edits, additions and removals change it."""
     entries = []
     for path in Path(root).rglob("*"):
-        if path.suffix not in {".py", ".swift"}:
+        if path.suffix != ".py":
             continue
         try:
             stat = path.stat()
@@ -35,3 +36,8 @@ def code_fingerprint(root):
             continue
         entries.append((path.relative_to(root).as_posix(), stat.st_mtime_ns, stat.st_size))
     return tuple(sorted(entries))
+
+
+def menu_fingerprint(root):
+    """Content identity shared with the environment of the compiled menu app."""
+    return hashlib.sha256((Path(root) / "menubar" / "BusyCrewMenu.swift").read_bytes()).hexdigest()
