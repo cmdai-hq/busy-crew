@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from .hook import EVENTS
+from .health import menu_fingerprint
 from .storage import claude_dir, codex_dir, load_json, state_dir, write_bytes
 
 LABEL = "local.busybar.agent-deck"
@@ -214,7 +215,17 @@ def _replace_preserving(path, after, expected, runtime):
                 # staged now retains the proposed version or another late edit.
                 write_bytes(recovery / (staged.name + ".initial"), expected)
                 raise RuntimeError(f"Concurrent edit detected; original restored, recovery: {recovery}")
-            staged.chmod(0o600)
+            try:
+                staged.chmod(0o600)
+            except OSError as exc:
+                # The caller has not received a FileChange yet: undo this commit here.
+                if not _same_bytes(path, after):
+                    raise RuntimeError(f"File changed during recovery; recovery: {recovery}") from exc
+                try:
+                    _exchange(staged, path)
+                except OSError as restore_error:
+                    raise RuntimeError(f"Replacement rollback failed; recovery: {recovery}") from restore_error
+                raise
         return FileChange(path, expected, after, runtime)
     finally:
         if not committed:
@@ -504,6 +515,7 @@ def uninstall():
         path = launch_agent_path()
         plist_before = _read_bytes(path)
         _read_plist(path)
+        _read_plist(menubar_agent_path(), MENU_LABEL)
         manifest = _load_manifest(runtime)
         plans, updated = _hook_plans(False, runtime, manifest, _read_plist(path), _recorded_root(manifest))
         domain = "gui/" + str(os.getuid())
@@ -542,8 +554,11 @@ def uninstall():
 
 def _swift_compiler():
     xcrun = shutil.which("xcrun")
-    if xcrun and subprocess.run([xcrun, "--find", "swiftc"], capture_output=True, timeout=60).returncode == 0:
-        return xcrun
+    try:
+        if xcrun and subprocess.run([xcrun, "--find", "swiftc"], capture_output=True, timeout=60).returncode == 0:
+            return xcrun
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Swift compiler lookup timed out after 60 seconds; retry `busy-crew menubar install`") from exc
     raise RuntimeError("Swift compiler unavailable; run `xcode-select --install` and retry")
 
 
@@ -555,20 +570,26 @@ def install_menubar(python=None):
     runtime = state_dir()
     build = Path(tempfile.mkdtemp(prefix=".menubar-build-", dir=runtime))
     try:
+        fingerprint = menu_fingerprint(MENU_SOURCE.parent.parent)
         built = build / "BusyCrewMenu"
-        result = subprocess.run([xcrun, "swiftc", *SWIFT_FLAGS, "-o", str(built), str(MENU_SOURCE)],
-                                capture_output=True, text=True, timeout=600)
+        try:
+            result = subprocess.run([xcrun, "swiftc", *SWIFT_FLAGS, "-o", str(built), str(MENU_SOURCE)],
+                                    capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Menu bar compilation timed out after 600 seconds; retry `busy-crew menubar install`") from exc
         if result.returncode != 0 or not built.is_file():
             raise RuntimeError("Menu bar app failed to compile:\n" + (result.stderr or "")[-2000:])
+        if menu_fingerprint(MENU_SOURCE.parent.parent) != fingerprint:
+            raise RuntimeError("Menu source changed during compilation; retry `busy-crew menubar install`")
         with _installation_lock(runtime):
-            _deploy_menubar(launchctl, runtime, built, python)
+            _deploy_menubar(launchctl, runtime, built, python, fingerprint)
         (runtime / "menubar-update-failed").unlink(missing_ok=True)  # See updates.reinstall_menubar.
     finally:
         shutil.rmtree(build, ignore_errors=True)
     print("Installed the menu bar status icon")
 
 
-def _deploy_menubar(launchctl, runtime, built, python):
+def _deploy_menubar(launchctl, runtime, built, python, fingerprint):
     path = menubar_agent_path()
     plist_before = _read_bytes(path)
     _read_plist(path, MENU_LABEL)  # Refuse to replace a plist Busy Crew does not own.
@@ -579,7 +600,7 @@ def _deploy_menubar(launchctl, runtime, built, python):
              "KeepAlive": {"SuccessfulExit": False}, "LimitLoadToSessionType": "Aqua",
              "ProcessType": "Interactive",
              "EnvironmentVariables": {"AGENT_DECK_STATE": str(runtime), "AGENT_DECK_PYTHON": python,
-                                      "AGENT_DECK_LABEL": LABEL},
+                                      "AGENT_DECK_LABEL": LABEL, "AGENT_DECK_MENU_FINGERPRINT": fingerprint},
              "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"}
     domain = "gui/" + str(os.getuid())
     target = domain + "/" + MENU_LABEL
@@ -644,5 +665,8 @@ def _remove_menubar(launchctl, runtime):
         if _loaded(launchctl, target):
             _stop(launchctl, target)
         _remove_preserving(path, plist_before, runtime)
-    for name in ("BusyCrewMenu", LEGACY_MENU_BINARY):
-        (runtime / "menubar" / name).unlink(missing_ok=True)
+    directory = runtime / "menubar"
+    for name in ("BusyCrewMenu", "BusyCrewMenu.previous", LEGACY_MENU_BINARY, LEGACY_MENU_BINARY + ".previous"):
+        (directory / name).unlink(missing_ok=True)
+    if directory.exists() and not any(directory.iterdir()):
+        directory.rmdir()

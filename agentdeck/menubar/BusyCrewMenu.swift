@@ -6,6 +6,7 @@ import AppKit
 import Foundation
 
 let staleAfter: TimeInterval = 10
+let acknowledgeAfter: TimeInterval = 5  // Same window as cli.current_status().
 let pollInterval: TimeInterval = 5
 let levels: Set<String> = ["degraded", "update", "paused", "ok"]
 let levelTitles = ["stopped": "Stopped", "degraded": "Degraded", "update": "Update available",
@@ -23,6 +24,8 @@ struct Snapshot {
     var sessions: [(provider: String, state: String)] = []
     var tokensError = false
     var codeChanged = false
+    var menuChanged = false
+    var canAcknowledge = false
     var acknowledgeable = 0
     var tokens: [String: Int] = [:]
     var tokensAt: Double?
@@ -39,10 +42,12 @@ struct Snapshot {
             return .stopped("Status file unreadable")
         }
         // A future timestamp (clock change) is as untrustworthy as an old one.
-        guard let at = (status["at"] as? NSNumber)?.doubleValue, abs(now - at) <= staleAfter else {
+        guard let at = (status["at"] as? NSNumber)?.doubleValue, at.isFinite,
+              0 <= now - at, now - at <= staleAfter else {
             return .stopped("Collector not responding")
         }
         var snapshot = Snapshot()
+        snapshot.canAcknowledge = now - at <= acknowledgeAfter
         if let health = status["health"] as? [String: Any] {
             let level = health["level"] as? String ?? ""
             snapshot.level = levels.contains(level) ? level : "degraded"
@@ -66,6 +71,13 @@ struct Snapshot {
         snapshot.tokensAt = (status["tokens_at"] as? NSNumber)?.doubleValue
         snapshot.latestVersion = status["latest_version"] as? String
         snapshot.installMode = status["install_mode"] as? String
+        if let current = status["menu_fingerprint"] as? String {
+            snapshot.menuChanged = current != ProcessInfo.processInfo.environment["AGENT_DECK_MENU_FINGERPRINT"]
+            if snapshot.menuChanged {
+                snapshot.reasons.append("Menu app changed — run `busy-crew menubar install`")
+                if ["ok", "paused"].contains(snapshot.level) { snapshot.level = "update" }
+            }
+        }
         return snapshot
     }
 
@@ -143,7 +155,7 @@ func menuEntries(_ snapshot: Snapshot, lastError: String?, now: Date, updating: 
     }
     // The collector publishes what OK would acknowledge on the bar right now.
     entries.append(Entry(title: "Acknowledge results", action: #selector(AppDelegate.acknowledge),
-                         enabled: snapshot.level != "stopped" && snapshot.acknowledgeable > 0))
+                         enabled: snapshot.level != "stopped" && snapshot.canAcknowledge && snapshot.acknowledgeable > 0))
     entries.append(Entry(title: "Refresh tokens now", action: #selector(AppDelegate.refreshTokens),
                          enabled: snapshot.level != "stopped"))
     entries.append(Entry(title: "Reload collector", action: #selector(AppDelegate.reload), enabled: true))
@@ -289,9 +301,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func openLog() {
-        if !NSWorkspace.shared.open(stateDir.appendingPathComponent("service.log")) {
-            lastError = "Last action failed: Open log"
-        }
+        lastError = NSWorkspace.shared.open(stateDir.appendingPathComponent("service.log"))
+            ? nil : "Last action failed: Open log"
     }
 
     @objc func quit() {

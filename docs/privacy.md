@@ -27,7 +27,7 @@ Nothing else leaves the Mac. Over plain HTTP, someone on your network could see 
 
 A first read scans backward up to 256 MB to find the selected turn's start. Later reads process only appended records. Journal bytes pass through memory; recognized messages, reasoning, other tool calls, tool outputs and token counts are skipped before JSON decoding.
 
-Turn events and question calls are decoded in memory when needed and can include question text or the agent's last message. Those records are cached for the current turn. Conversation text is never written to Busy Crew's state files, logged or sent.
+Turn events and question calls are decoded in memory when needed and can include question text or the agent's last message. After folding each complete record, the collector retains only turn state, pending call IDs and the file cursor; it does not cache the turn's records. An unfinished line is reread on the next append. Conversation text is never written to Busy Crew's state files, logged or sent.
 
 ## What is kept
 

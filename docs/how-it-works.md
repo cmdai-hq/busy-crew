@@ -90,6 +90,11 @@ Read-only access to `~/.codex/state_5.sqlite`, `thread_history_1.sqlite`, and ro
 
 The first read finds the turn's start by scanning backward up to 256 MB. Subsequent polls read only appended records. If the start is outside that initial window, the source shows `?`.
 
+The collector also folds only the new complete records into a resumable state;
+it does not retain or replay the turn's event history. A changed turn ID, file
+replacement, truncation or same-size rewrite triggers a fresh backward scan.
+An invalid append discards the fold and retries a full scan after the next change.
+
 - A finished or failed conversation silent for two hours is dead and leaves the count, along with its `✓`.
 - If the rollout already contains a newer root turn than SQLite, the previous completion is cleared and the session remains unknown until the sources agree.
 - An `inProgress` turn with no local writes for 15 minutes is discarded. This avoids ghost sessions, but can also hide a very long, silent turn or an extended wait.

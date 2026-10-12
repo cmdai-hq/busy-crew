@@ -58,6 +58,18 @@ CI tests Linux and macOS on Python 3.11, 3.14 and 3.15. Device integration and r
 LaunchAgent lifecycle checks require an explicitly chosen test device/account;
 unit tests and wheel smoke tests do not establish those results.
 
+To measure the Codex fold against an earlier revision using only synthetic data:
+
+```sh
+mkdir -p /tmp/busy-crew-baseline
+git archive 9b66e3b | tar -x -C /tmp/busy-crew-baseline
+uv run python scripts/benchmark_codex_fold.py --baseline-root /tmp/busy-crew-baseline
+```
+
+This compares the original fold with 1,000 synthetic transition sequences, then
+measures CPU per one-record append after 1,000 and 50,000 historical records.
+The first backward scan is excluded; real agent journals are never opened.
+
 ## Developing on the Mac that runs your bar
 
 Install your everyday copy from Homebrew (or `uv tool install`), as users do,

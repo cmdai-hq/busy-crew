@@ -285,45 +285,61 @@ def extend_turn(path, start):
     return records, end
 
 
-def rollout_details(records, turn_id):
-    current, terminal, completed_at = None, None, 0
-    pending, explicit_wait, boundary, superseded = set(), False, False, False
-    for record in records:
+class RolloutDetails:
+    """Resumable selected-turn fold; retain state, never the already consumed records."""
+
+    def __init__(self, turn_id):
+        self.turn_id = turn_id
+        self.current = self.terminal = None
+        self.completed_at = 0
+        self.pending = set()
+        self.explicit_wait = self.boundary = self.superseded = False
+
+    def feed(self, record):
         if not isinstance(record, dict) or not isinstance(record.get("payload", {}), dict):
             raise SourceError("Invalid rollout record")
         payload = record.get("payload", {})
         kind = payload.get("type")
         if record.get("type") == "event_msg":
             if kind in {"task_started", "turn_started"}:
-                current = identifier(payload.get("turn_id"))
+                self.current = identifier(payload.get("turn_id"))
                 root = payload.get("root_turn_id")
                 if root is not None:
                     identifier(root)
-                if boundary and current != turn_id and root in {None, current}:
-                    superseded = True
-                boundary |= current == turn_id
-            if kind in {"task_complete", "turn_complete", "turn_aborted"} and payload.get("turn_id") == turn_id:
-                terminal = "aborted" if kind == "turn_aborted" else ("failed" if payload.get("error") else "completed")
-                completed_at = timestamp(payload.get("completed_at") or 0)
-                pending.clear()
-                explicit_wait = False
-            if current == turn_id and terminal is None:
+                if self.boundary and self.current != self.turn_id and root in {None, self.current}:
+                    self.superseded = True
+                self.boundary |= self.current == self.turn_id
+            if kind in {"task_complete", "turn_complete", "turn_aborted"} and payload.get("turn_id") == self.turn_id:
+                self.terminal = "aborted" if kind == "turn_aborted" else ("failed" if payload.get("error") else "completed")
+                self.completed_at = timestamp(payload.get("completed_at") or 0)
+                self.pending.clear()
+                self.explicit_wait = False
+            if self.current == self.turn_id and self.terminal is None:
                 if kind in {"approval_request", "request_user_input"}:
-                    explicit_wait = True
+                    self.explicit_wait = True
                 elif kind in {"approval_response", "user_message"}:
-                    explicit_wait = False
+                    self.explicit_wait = False
                 elif kind == "thread_status_changed":
                     flags = payload.get("active_flags", [])
                     if not isinstance(flags, list) or not all(isinstance(flag, str) for flag in flags):
                         raise SourceError("Invalid active flags")
-                    explicit_wait = bool(set(flags) & {"waitingOnApproval", "waitingOnUserInput"})
-        elif current == turn_id and terminal is None and record.get("type") == "response_item":
+                    self.explicit_wait = bool(set(flags) & {"waitingOnApproval", "waitingOnUserInput"})
+        elif self.current == self.turn_id and self.terminal is None and record.get("type") == "response_item":
             if kind == "function_call" and payload.get("name") in {"request_user_input", "mcp__request_user_input"}:
-                pending.add(identifier(payload.get("call_id")))
+                self.pending.add(identifier(payload.get("call_id")))
             elif kind == "function_call_output":
-                pending.discard(payload.get("call_id"))
-    return {"terminal": terminal, "waiting": bool(pending or explicit_wait),
-            "completed_at": completed_at, "boundary": boundary, "superseded": superseded}
+                self.pending.discard(payload.get("call_id"))
+
+    def result(self):
+        return {"terminal": self.terminal, "waiting": bool(self.pending or self.explicit_wait),
+                "completed_at": self.completed_at, "boundary": self.boundary, "superseded": self.superseded}
+
+
+def rollout_details(records, turn_id):
+    details = RolloutDetails(turn_id)
+    for record in records:
+        details.feed(record)
+    return details.result()
 
 
 def rollout_state(records, turn_id):
@@ -675,30 +691,39 @@ class Observer:
             self._prune_hooks(seen, registry_complete=registry_complete)
 
     def _turn_details(self, sid, path, stat, version):
-        """The selected turn's details, reading only what Codex appended since the last poll when it can."""
+        """Read and fold only appended complete records while the file and turn match."""
         identity = (str(path.resolve()), stat.st_dev, stat.st_ino, version)
         change = (stat.st_mtime_ns, stat.st_size)
         cached = self.tail_cache.get(sid)
         if cached and cached["identity"] == identity and cached["change"] == change:
             return cached["outcome"]
         try:
-            if cached and cached["identity"] == identity and cached["end"] is not None and stat.st_size >= cached["end"]:
-                more, end = extend_turn(path, cached["end"])
-                if cached["records"] is not None:
-                    records = cached["records"] + more
-                else:  # Still waiting for the turn's start to appear.
-                    start = next((index for index, record in enumerate(more) if is_boundary(record, version)), None)
-                    records = None if start is None else more[start:]
+            # Compare against the last observed size, including an unfinished line.
+            # A same-size rewrite must rescan too; appends strictly grow the file.
+            if cached and cached["identity"] == identity and cached["end"] is not None and stat.st_size > cached["change"][1]:
+                records, end = extend_turn(path, cached["end"])
+                details = cached["details"]
+                if details is None:  # Still waiting for the selected turn's start.
+                    start = next((index for index, record in enumerate(records) if is_boundary(record, version)), None)
+                    records = [] if start is None else records[start:]
+                    if start is not None:
+                        details = RolloutDetails(version)
             else:
                 records, end = read_turn_tail(path, version)
-            outcome = BoundaryUnavailable(end) if records is None else rollout_details(records, version)
+                details = None if records is None else RolloutDetails(version)
+            if details is None:
+                outcome = BoundaryUnavailable(end)
+            else:
+                for record in records:
+                    details.feed(record)
+                outcome = details.result()
         except BoundaryUnavailable as exc:
-            # Later polls read only what is appended, looking for the start: a long turn is not rescanned.
-            records, end, outcome = None, exc.end, exc
+            # Look only among later appends for the missing boundary.
+            details, end, outcome = None, exc.end, exc
         except ValueError as exc:
-            # An unreadable rollout stays so until it changes: don't rescan it every poll.
-            records, end, outcome = None, None, exc
-        self.tail_cache[sid] = {"identity": identity, "change": change, "records": records, "end": end, "outcome": outcome}
+            # Discard a partially updated fold; retry a full scan when the file changes.
+            details, end, outcome = None, None, exc
+        self.tail_cache[sid] = {"identity": identity, "change": change, "details": details, "end": end, "outcome": outcome}
         return outcome
 
     def codex(self):

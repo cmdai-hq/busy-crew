@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agentdeck import cli
-from agentdeck.health import code_fingerprint, health
+from agentdeck.health import code_fingerprint, health, menu_fingerprint
 
 installer = importlib.import_module("agentdeck.install")
 
@@ -69,7 +69,11 @@ class FingerprintTests(unittest.TestCase):
             self.assertEqual(code_fingerprint(root), first)
             (root / "menubar" / "BusyCrewMenu.swift").write_text("// app\n")
             second = code_fingerprint(root)
-            self.assertNotEqual(second, first)
+            self.assertEqual(second, first)
+            menu_before = menu_fingerprint(root)
+            (root / "menubar" / "BusyCrewMenu.swift").write_text("// new app\n")
+            self.assertNotEqual(menu_fingerprint(root), menu_before)
+            self.assertEqual(code_fingerprint(root), first)
             stat = source.stat()
             source.write_text("x = 22\n")
             os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
@@ -150,7 +154,8 @@ class MenuBarInstallTests(unittest.TestCase):
         self.assertEqual(agent["KeepAlive"], {"SuccessfulExit": False})
         self.assertEqual(agent["LimitLoadToSessionType"], "Aqua")
         self.assertEqual(agent["EnvironmentVariables"], {"AGENT_DECK_STATE": str(self.runtime),
-                         "AGENT_DECK_PYTHON": sys.executable, "AGENT_DECK_LABEL": installer.LABEL})
+                         "AGENT_DECK_PYTHON": sys.executable, "AGENT_DECK_LABEL": installer.LABEL,
+                         "AGENT_DECK_MENU_FINGERPRINT": menu_fingerprint(installer.MENU_SOURCE.parent.parent)})
         self.assertIn(self.target, self.tools.loaded)
         compile_call = next(call for call in self.tools.calls if call[1] == "swiftc")
         self.assertEqual(compile_call[2:5], ["-swift-version", "5", "-O"])
@@ -192,12 +197,21 @@ class MenuBarInstallTests(unittest.TestCase):
         self.assertEqual(self.installed(), before)
         self.assertIn(self.target, self.tools.loaded)
 
+    def test_source_change_during_compile_keeps_previous_install(self):
+        installer.install_menubar()
+        before = self.installed()
+        with patch.object(installer, "menu_fingerprint", side_effect=["before", "after"]):
+            with self.assertRaisesRegex(RuntimeError, "source changed"):
+                installer.install_menubar()
+        self.assertEqual(self.installed(), before)
+        self.assertIn(self.target, self.tools.loaded)
+
     def test_failed_bootstrap_restores_previous_binary_and_plist(self):
         installer.install_menubar()
         before = self.installed()
         self.tools.fail_bootstrap = True
         with self.assertRaises(subprocess.CalledProcessError):
-            installer.install_menubar()
+            installer.install_menubar(python="/different/python")
         self.assertEqual(self.installed(), before)
         self.assertIn(self.target, self.tools.loaded)
         self.assertFalse(self.binary.with_name("BusyCrewMenu.previous").exists())
@@ -258,10 +272,62 @@ class MenuBarInstallTests(unittest.TestCase):
 
     def test_uninstall_menubar_removes_agent_plist_and_binary(self):
         installer.install_menubar()
+        for name in ("BusyCrewMenu.previous", "AgentDeckMenu.previous"):
+            (self.binary.parent / name).write_bytes(b"interrupted install")
         installer.uninstall_menubar()
         self.assertFalse(self.plist.exists())
         self.assertFalse(self.binary.exists())
+        self.assertFalse(self.binary.parent.exists())
         self.assertNotIn(self.target, self.tools.loaded)
+
+    def test_uninstall_retains_unrelated_menu_files(self):
+        installer.install_menubar()
+        other = self.binary.parent / "unrelated.txt"
+        other.write_text("keep")
+        installer.uninstall_menubar()
+        self.assertEqual(other.read_text(), "keep")
+
+    def test_foreign_menu_plist_aborts_before_removing_collector(self):
+        installer.install(hooks=False)
+        collector = installer.launch_agent_path()
+        before = collector.read_bytes()
+        self.plist.write_bytes(plistlib.dumps({"Label": "foreign.agent"}))
+        calls = len(self.tools.calls)
+        with self.assertRaisesRegex(ValueError, "not owned"):
+            installer.uninstall()
+        self.assertEqual(collector.read_bytes(), before)
+        self.assertIn("gui/%d/%s" % (os.getuid(), installer.LABEL), self.tools.loaded)
+        self.assertFalse(any(call[1] == "bootout" for call in self.tools.calls[calls:]))
+
+    def test_compiler_timeouts_leave_previous_install_running(self):
+        installer.install_menubar()
+        before = self.installed()
+        original = self.tools.run
+        for command in ("--find", "swiftc"):
+            def timeout(args, **kwargs):
+                if args[0].endswith("xcrun") and args[1] == command:
+                    raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+                return original(args, **kwargs)
+            with self.subTest(command=command), patch.object(installer.subprocess, "run", side_effect=timeout):
+                with self.assertRaisesRegex(RuntimeError, "timed out"):
+                    installer.install_menubar()
+            self.assertEqual(self.installed(), before)
+            self.assertIn(self.target, self.tools.loaded)
+            self.assertFalse(list(self.runtime.glob(".menubar-build-*")))
+
+    def test_failed_recovery_chmod_undoes_plist_exchange(self):
+        installer.install_menubar()
+        before = self.installed()
+        original = Path.chmod
+        def fail_recovery(path, mode, **kwargs):
+            if path.parent.name == "recovery" and path.name.startswith(self.plist.name):
+                raise OSError("fixture chmod failure")
+            return original(path, mode, **kwargs)
+        with patch.object(Path, "chmod", fail_recovery):
+            with self.assertRaisesRegex(OSError, "fixture chmod failure"):
+                installer.install_menubar(python="/different/python")
+        self.assertEqual(self.installed(), before)
+        self.assertIn(self.target, self.tools.loaded)
 
     def test_full_uninstall_removes_menubar_only_when_present(self):
         installer.uninstall()
@@ -292,12 +358,15 @@ class SwiftAppTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.temp.cleanup()
 
-    def menu(self, content):
+    def menu(self, content, fingerprint=None):
         path = Path(self.temp.name) / "menu-status.json"
         path.unlink(missing_ok=True)
         if content is not None:
             path.write_text(json.dumps(content))
-        result = subprocess.run([str(self.binary), "--menu", str(path)], capture_output=True, text=True, timeout=10)
+        env = dict(os.environ)
+        if fingerprint is not None:
+            env["AGENT_DECK_MENU_FINGERPRINT"] = fingerprint
+        result = subprocess.run([str(self.binary), "--menu", str(path)], capture_output=True, text=True, timeout=10, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.splitlines()
 
@@ -320,6 +389,22 @@ class SwiftAppTests(unittest.TestCase):
         self.assertIn("[x] Acknowledge results", self.menu(dict(status, acknowledgeable=1)))
         self.assertIn("[ ] Acknowledge results", self.menu(None))
         self.assertIn("[x] Reload collector", self.menu(None))
+
+    def test_acknowledge_rejects_stale_and_future_status(self):
+        status = {"sessions": [], "health": {"level": "ok", "reasons": []}, "acknowledgeable": 1}
+        for age in (-2, 6, 11):
+            with self.subTest(age=age):
+                self.assertIn("[ ] Acknowledge results", self.menu(dict(status, at=time.time() - age)))
+        self.assertIn("[x] Acknowledge results", self.menu(dict(status, at=time.time() - 2)))
+
+    def test_swift_change_survives_collector_reload(self):
+        status = {"at": time.time(), "sessions": [], "health": {"level": "ok", "reasons": []},
+                  "menu_fingerprint": "new", "code_changed": False}
+        lines = [line.strip() for line in self.menu(status, fingerprint="old")]
+        self.assertIn("Menu app changed — run `busy-crew menubar install`", lines)
+        self.assertFalse(any("New version on disk" in line for line in lines))
+        self.assertNotIn("Menu app changed — run `busy-crew menubar install`",
+                         [line.strip() for line in self.menu(status, fingerprint="new")])
 
     def test_update_entry_follows_the_installation_mode(self):
         status = {"at": time.time(), "sessions": [], "latest_version": "1.1.0",

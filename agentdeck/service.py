@@ -12,7 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .device import DEFAULT_ADDRESS, Device
-from .health import code_fingerprint, health
+from .health import code_fingerprint, health, menu_fingerprint
 from .model import layout
 from .observe import Observer
 from .render import render, visible_sessions
@@ -298,6 +298,10 @@ class Service:
             observed, changed_at = None, 0
             started_at, code_changed, checked_at = time.time(), False, None
             fingerprint = self._fingerprint()
+            try:
+                menu_source = menu_fingerprint(self.package_root)
+            except OSError:
+                menu_source = None
             while not self.stop.is_set():
                 now = time.monotonic()
                 watched = self.news(inbox)
@@ -310,12 +314,16 @@ class Service:
                 xpm = frame.xpm()
                 if checked_at is None:
                     checked_at = now
-                elif not code_changed and now - checked_at >= 30:
+                elif now - checked_at >= 30:
+                    try:
+                        menu_source = menu_fingerprint(self.package_root)
+                    except OSError:
+                        menu_source = None
                     current, checked_at = self._fingerprint(), now
                     if fingerprint is None:
                         fingerprint = current
                     elif current is not None:
-                        code_changed = current != fingerprint
+                        code_changed = code_changed or current != fingerprint
                 device_error = None
                 try:
                     if self.paused:
@@ -352,6 +360,7 @@ class Service:
                     "inputs_error": self.inputs_error,
                     "events_dropped": self.events_dropped, "last_control": self.last_control,
                     "pid": os.getpid(), "started_at": started_at, "code_changed": code_changed,
+                    "menu_fingerprint": menu_source,
                     "version": self.updates.current, "latest_version": self.updates.available(),
                     "install_mode": self.install_mode,
                     "menubar_update_failed": (self.runtime / MENUBAR_FAILED).exists(),

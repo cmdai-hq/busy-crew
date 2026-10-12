@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Finish incremental Codex observation: fold each appended event once instead
+  of replaying and retaining the whole selected turn on every change.
+- Detect Swift menu source changes separately from Python collector changes;
+  show the menu reinstall instruction until its compiled app is refreshed.
+  Disable acknowledgment for status older than 5 seconds or in the future,
+  and clear an earlier action error when opening the log succeeds.
+- Clean up interrupted menu installs and empty binary directories; reject a
+  foreign menu LaunchAgent before removing the collector. Restore exchanged
+  files if recovery permission changes fail, and explain compiler timeouts.
+
 ## 1.1.4 — 2026-10-12
 
 - Once an hour, remove Claude hook snapshots older than 24 hours, or older than
