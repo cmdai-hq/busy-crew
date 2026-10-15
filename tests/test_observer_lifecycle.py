@@ -954,6 +954,42 @@ class LifecycleTests(unittest.TestCase):
         active = self.observer.poll()[0]
         self.assertEqual((active.state, active.version), ("working", "next"))
 
+    def test_review_root_turn_without_own_start_is_bounded_by_its_sub_turn(self):
+        # `codex review` logs no task_started for the root turn, only for its review sub-turn.
+        records = [event("task_complete", turn_id="previous"),
+                   event("item_completed", turn_id="turn"),
+                   event("task_started", turn_id="review", root_turn_id="turn"),
+                   event("item_completed", turn_id="review"),
+                   event("task_complete", turn_id="turn", completed_at=self.now)]
+        self.codex_fixture(records, "completed", self.now)
+        self.assertEqual(read_turn(self.rollout, "turn"), [records[2], records[4]])
+        result = self.observer.poll()[0]
+        self.assertEqual(result.state, "ready")
+        self.assertFalse(self.observer.errors)
+
+    def test_review_sub_turn_appended_later_bounds_a_root_turn_without_own_start(self):
+        self.codex_fixture([event("task_complete", turn_id="previous")])
+        waiting = self.observer._turn_details("c", self.rollout, self.rollout.stat(), "turn")
+        self.assertIsInstance(waiting, observe.BoundaryUnavailable)
+        with self.rollout.open("a") as stream:
+            for record in [event("task_started", turn_id="review", root_turn_id="turn"),
+                           event("task_complete", turn_id="turn", completed_at=self.now)]:
+                stream.write(json.dumps(record) + "\n")
+        details = self.observer._turn_details("c", self.rollout, self.rollout.stat(), "turn")
+        self.assertEqual(details, observe.rollout_details(read_turn(self.rollout, "turn"), "turn"))
+        self.assertEqual(details["terminal"], "completed")
+
+    def test_own_root_start_wins_over_later_sub_turn_starts(self):
+        records = [event("task_started", turn_id="turn"),
+                   function("function_call", name="request_user_input", call_id="q"),
+                   event("task_started", turn_id="child", root_turn_id="turn")]
+        self.assertEqual(read_turn(self._write(records), "turn"), records)
+
+    def _write(self, records):
+        path = self.root / "own-start-rollout"
+        path.write_text("".join(json.dumps(row) + "\n" for row in records))
+        return path
+
     def test_subagent_started_event_does_not_supersede_root_completion(self):
         records = [event("task_started", turn_id="turn", root_turn_id="turn"),
                    event("task_complete", turn_id="turn"),
