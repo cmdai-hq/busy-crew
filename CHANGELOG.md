@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.5 — 2026-10-15
 
 - Finish incremental Codex observation: fold each appended event once instead
   of replaying and retaining the whole selected turn on every change.
