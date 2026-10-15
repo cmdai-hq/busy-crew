@@ -979,6 +979,13 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(details, observe.rollout_details(read_turn(self.rollout, "turn"), "turn"))
         self.assertEqual(details["terminal"], "completed")
 
+    def test_later_review_root_logged_only_by_its_sub_turn_supersedes(self):
+        records = [event("task_started", turn_id="review", root_turn_id="turn"),
+                   event("task_complete", turn_id="turn"),
+                   event("task_started", turn_id="next-review", root_turn_id="next")]
+        self.assertTrue(observe.rollout_details(records, "turn")["superseded"])
+        self.assertEqual(rollout_state(records, "turn"), (False, False))
+
     def test_own_root_start_wins_over_later_sub_turn_starts(self):
         records = [event("task_started", turn_id="turn"),
                    function("function_call", name="request_user_input", call_id="q"),

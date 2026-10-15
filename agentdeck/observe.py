@@ -321,7 +321,8 @@ class RolloutDetails:
                 root = payload.get("root_turn_id")
                 if root is not None:
                     identifier(root)
-                if self.boundary and self.current != self.turn_id and root in {None, self.current}:
+                # Any start outside the selected turn's tree begins a newer root, even one logged only by its sub-turn.
+                if self.boundary and self.current != self.turn_id and root != self.turn_id:
                     self.superseded = True
                 self.boundary |= self.turn_id in {self.current, root}
             if kind in {"task_complete", "turn_complete", "turn_aborted"} and payload.get("turn_id") == self.turn_id:
