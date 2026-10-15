@@ -185,6 +185,13 @@ def is_boundary(record, turn_id):
             and payload.get("turn_id") == turn_id)
 
 
+def is_child_start(record, turn_id):
+    """A sub-turn of `turn_id`: `codex review` and `codex exec` log only these, never the root's own start."""
+    payload = record.get("payload", {})
+    return (record.get("type") == "event_msg" and payload.get("type") in {"task_started", "turn_started"}
+            and payload.get("turn_id") != turn_id and payload.get("root_turn_id") == turn_id)
+
+
 class BoundaryUnavailable(SourceError):
     """The selected turn's start is not in the scanned tail; `end` is where complete lines stop."""
 
@@ -196,6 +203,8 @@ class BoundaryUnavailable(SourceError):
 def read_turn_tail(path, turn_id):
     """The selected turn's records, and the offset just past the last complete line read."""
     records, buffer, terminated, oversized, head, complete_end = [], b"", False, False, b"", 0
+    # Without the root's own start, the earliest sub-turn start bounds the turn.
+    fallback = None
     with path.open("rb") as handle:
         position = handle.seek(0, 2)
         floor = max(0, position - MAX_ROLLOUT_SCAN)
@@ -238,6 +247,8 @@ def read_turn_tail(path, turn_id):
                 records.append(record)
                 if is_boundary(record, turn_id):
                     return list(reversed(records)), complete_end
+                if is_child_start(record, turn_id):
+                    fallback = len(records)
             if len(buffer) > MAX_RECORD:
                 oversized, head, buffer = True, buffer[:4096], b""
         if floor == 0 and (oversized or len(buffer) > MAX_RECORD):
@@ -249,6 +260,10 @@ def read_turn_tail(path, turn_id):
                 records.append(record)
                 if is_boundary(record, turn_id):
                     return list(reversed(records)), complete_end
+                if is_child_start(record, turn_id):
+                    fallback = len(records)
+    if fallback is not None:
+        return list(reversed(records[:fallback])), complete_end
     raise BoundaryUnavailable(complete_end)
 
 
@@ -306,9 +321,10 @@ class RolloutDetails:
                 root = payload.get("root_turn_id")
                 if root is not None:
                     identifier(root)
-                if self.boundary and self.current != self.turn_id and root in {None, self.current}:
+                # Any start outside the selected turn's tree begins a newer root, even one logged only by its sub-turn.
+                if self.boundary and self.current != self.turn_id and root != self.turn_id:
                     self.superseded = True
-                self.boundary |= self.current == self.turn_id
+                self.boundary |= self.turn_id in {self.current, root}
             if kind in {"task_complete", "turn_complete", "turn_aborted"} and payload.get("turn_id") == self.turn_id:
                 self.terminal = "aborted" if kind == "turn_aborted" else ("failed" if payload.get("error") else "completed")
                 self.completed_at = timestamp(payload.get("completed_at") or 0)
@@ -707,6 +723,8 @@ class Observer:
                 # when Codex repeats the selected ID. Drop earlier wait/terminal state.
                 start = next((index for index in range(len(records) - 1, -1, -1)
                               if is_boundary(records[index], version)), None)
+                if start is None and details is None:
+                    start = next((index for index, record in enumerate(records) if is_child_start(record, version)), None)
                 if start is not None:
                     records, details = records[start:], RolloutDetails(version)
                 elif details is None:  # Still waiting for the selected turn's start.

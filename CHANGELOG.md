@@ -11,6 +11,9 @@
 - Clean up interrupted menu installs and empty binary directories; reject a
   foreign menu LaunchAgent before removing the collector. Restore exchanged
   files if recovery permission changes fail, and explain compiler timeouts.
+- Read `codex review` and `codex exec` threads: their root turn logs no start
+  of its own, so its earliest sub-turn start now bounds it instead of raising
+  "Selected turn boundary unavailable" for two hours.
 
 ## 1.1.4 — 2026-10-12
 
