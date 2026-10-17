@@ -89,11 +89,13 @@ jobs:
           cd "$RUNNER_TEMP/bottle"
           brew bottle --json --root-url="$ROOT_URL" cmdai-hq/tap/busy-crew
           brew bottle --merge --write --no-commit ./*.bottle.json
+      # Cached where `brew install` looks first, it is checked against the formula's new checksum.
       - name: Pour the bottle as users will, and test it
         if: steps.needed.outputs.build == 'true'
         run: |
           brew uninstall busy-crew
-          brew install "$RUNNER_TEMP"/bottle/*.bottle.tar.gz
+          cp "$RUNNER_TEMP"/bottle/*.bottle.tar.gz "$(brew --cache --force-bottle cmdai-hq/tap/busy-crew)"
+          brew install cmdai-hq/tap/busy-crew
           brew info --json=v2 cmdai-hq/tap/busy-crew | jq -e '.formulae[0].installed[0].poured_from_bottle'
           brew test cmdai-hq/tap/busy-crew
       # Homebrew downloads `<root_url>/<filename>`; `brew bottle` names the local file differently.
