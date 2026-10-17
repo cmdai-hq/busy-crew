@@ -4,7 +4,8 @@
 
 The formula's `exclude_packages` (packages that homebrew-core formulae provide) are left out,
 with the dependencies only they need. Dependency markers are evaluated for macOS on both
-architectures, with the formula's `python@3.x`.
+architectures, with the formula's `python@3.x`. A new version drops the previous version's
+`bottle` block; the Homebrew workflow builds and writes the new one.
 """
 import json
 import re
@@ -17,6 +18,7 @@ from packaging.markers import Marker
 
 PACKAGE = "busy-crew"
 RESOURCE = re.compile(r'^  resource "[^"]+" do\n(?:    .*\n)*?  end\n\n?', re.MULTILINE)
+BOTTLE = re.compile(r'^  bottle do\n(?:    .*\n)*?  end\n\n?', re.MULTILINE)
 
 
 def sdist(name, version, retries=10):
@@ -65,6 +67,8 @@ def update(formula, version, lock, lookup=None):
     excluded = set(re.search(r"exclude_packages:\s*%w\[([^\]]*)\]", formula).group(1).split())
     python = re.search(r'depends_on "python@(3\.\d+)"', formula).group(1)
     url, sha256 = lookup(PACKAGE, version)
+    if f'  url "{url}"\n' not in formula:
+        formula = BOTTLE.sub("", formula)  # Its bottles were built from the previous sdist.
     formula = re.sub(r'^  url ".*"$', f'  url "{url}"', formula, count=1, flags=re.MULTILINE)
     formula = re.sub(r'^  sha256 ".*"$', f'  sha256 "{sha256}"', formula, count=1, flags=re.MULTILINE)
     blocks = []

@@ -99,6 +99,16 @@ class FormulaUpdateTests(unittest.TestCase):
         once = homebrew_formula.update(FORMULA, "1.1.0", LOCK, lookup)
         self.assertEqual(homebrew_formula.update(once, "1.1.0", LOCK, lookup), once)
 
+    def test_a_new_version_drops_the_previous_bottles(self):
+        bottled = homebrew_formula.update(FORMULA, "1.1.0", LOCK, lookup).replace(
+            '  license "MIT"\n', '  license "MIT"\n\n  bottle do\n'
+            '    root_url "https://github.com/cmdai-hq/busy-crew/releases/download/v1.1.0"\n'
+            '    sha256 cellar: :any, arm64_sequoia: "bottle-1.1.0"\n  end\n')
+        self.assertEqual(homebrew_formula.update(bottled, "1.1.0", LOCK, lookup), bottled)
+        updated = homebrew_formula.update(bottled, "1.1.1", LOCK, lookup)
+        self.assertNotIn("bottle", updated)
+        self.assertIn('  sha256 "sha-busy-crew-1.1.1"\n  license "MIT"\n\n  depends_on "pydantic"\n', updated)
+
     def test_real_formula_dependencies_skip_what_homebrew_provides(self):
         import tomllib
         with open(Path(__file__).parents[1] / "uv.lock", "rb") as source:
