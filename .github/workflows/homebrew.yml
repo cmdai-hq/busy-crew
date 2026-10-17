@@ -1,0 +1,165 @@
+name: Homebrew
+# Points the tap's formula at a PyPI release with a prebuilt bottle, so `brew install` pours it
+# instead of compiling every Python dependency, then opens the tap pull request, merged once the
+# tap's tests pass. A pull request changing this update does a dry run on the latest release.
+# The build runs packages' build code, so it gets no write access; a separate job publishes.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, such as v1.1.5
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/homebrew.yml
+      - scripts/homebrew_formula.py
+permissions:
+  contents: read
+jobs:
+  bottle:
+    # Apple Silicon only: a bottle also pours on later macOS versions, so the oldest runner covers
+    # the most Macs. Intel Macs keep building from source.
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+    outputs:
+      build: ${{ steps.needed.outputs.build }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # The release's uv.lock is read from its tag.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: Homebrew/actions/setup-homebrew@eb02c69dbabdb66ff183c614f4ce7ab3c077592c # main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: cmdai-hq/homebrew-tap
+          path: tap
+          persist-credentials: false
+      - name: Choose the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          tag="${TAG:-$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: Point the formula at the PyPI release
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          git show "$TAG:uv.lock" > "$RUNNER_TEMP/uv.lock"
+          uv run --locked python scripts/homebrew_formula.py tap/Formula/busy-crew.rb "$VERSION" "$RUNNER_TEMP/uv.lock"
+      # Safe to re-run: a release already on main with its bottle stops here.
+      - name: Check whether the tap needs this release
+        id: needed
+        working-directory: tap
+        env:
+          DRY_RUN: ${{ github.event_name == 'pull_request' }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if [ "$DRY_RUN" = false ] && git diff --quiet && grep -q '^  bottle do$' Formula/busy-crew.rb; then
+            echo "The tap's main already has busy-crew $VERSION and its bottle"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build the bottle and write it into the formula
+        if: steps.needed.outputs.build == 'true'
+        env:
+          ROOT_URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.release.outputs.tag }}
+        run: |
+          taps="$(brew --repository)/Library/Taps/cmdai-hq"
+          mkdir -p "$taps"
+          ln -s "$GITHUB_WORKSPACE/tap" "$taps/homebrew-tap"
+          brew install --build-bottle cmdai-hq/tap/busy-crew
+          mkdir "$RUNNER_TEMP/bottle"
+          cd "$RUNNER_TEMP/bottle"
+          brew bottle --json --root-url="$ROOT_URL" cmdai-hq/tap/busy-crew
+          brew bottle --merge --write --no-commit ./*.bottle.json
+      # Cached where `brew install` looks first, it is checked against the formula's new checksum.
+      - name: Pour the bottle as users will, and test it
+        if: steps.needed.outputs.build == 'true'
+        run: |
+          brew uninstall busy-crew
+          cp "$RUNNER_TEMP"/bottle/*.bottle.tar.gz "$(brew --cache --force-bottle cmdai-hq/tap/busy-crew)"
+          brew install cmdai-hq/tap/busy-crew
+          brew info --json=v2 cmdai-hq/tap/busy-crew | jq -e '.formulae[0].installed[0].poured_from_bottle'
+          brew test cmdai-hq/tap/busy-crew
+      # Homebrew downloads `<root_url>/<filename>`; `brew bottle` names the local file differently.
+      - name: Gather the formula and the bottle under its download name
+        if: steps.needed.outputs.build == 'true'
+        working-directory: ${{ runner.temp }}/bottle
+        run: |
+          mv "$(jq -r '.[].bottle.tags[].local_filename' ./*.bottle.json)" "$(jq -r '.[].bottle.tags[].filename' ./*.bottle.json)"
+          cp "$GITHUB_WORKSPACE/tap/Formula/busy-crew.rb" .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.needed.outputs.build == 'true'
+        with:
+          name: homebrew
+          path: |
+            ${{ runner.temp }}/bottle/busy-crew.rb
+            ${{ runner.temp }}/bottle/*.bottle.json
+            ${{ runner.temp }}/bottle/*.bottle.tar.gz
+          if-no-files-found: error
+  publish:
+    needs: bottle
+    if: github.event_name != 'pull_request' && needs.bottle.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # Attach the bottle to the release.
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: homebrew
+          path: homebrew
+      - name: Attach the bottle to the release, and check its download
+        working-directory: homebrew
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.bottle.outputs.tag }}
+        run: |
+          read -r root_url filename sha256 < <(jq -r '.[].bottle | .root_url as $root | .tags[] | "\($root) \(.filename) \(.sha256)"' ./*.bottle.json)
+          gh release upload "$TAG" "$filename" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "$sha256  -" > expected.sha256
+          curl --fail --silent --show-error --location --retry 5 "$root_url/$filename" | sha256sum --check expected.sha256
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: cmdai-hq/homebrew-tap
+          path: tap
+          persist-credentials: false
+      - name: Open the tap pull request, merged once its tests pass
+        working-directory: tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ needs.bottle.outputs.tag }}
+          VERSION: ${{ needs.bottle.outputs.version }}
+        run: |
+          branch="busy-crew-$VERSION"
+          cp ../homebrew/busy-crew.rb Formula/busy-crew.rb
+          gh auth setup-git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$branch"
+          git commit -am "busy-crew $VERSION"
+          git push --force origin "$branch"  # This bot owns the branch; a re-run replaces its own commit.
+          if [ "$(gh pr view "$branch" --json state --jq .state 2>/dev/null)" != "OPEN" ]; then
+            gh pr create --base main --head "$branch" --title "busy-crew $VERSION" \
+              --body "Release https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG, from its PyPI sdist and uv.lock, with its Apple Silicon bottle."
+          fi
+          gh pr merge "$branch" --auto --squash --delete-branch
