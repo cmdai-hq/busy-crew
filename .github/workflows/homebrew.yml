@@ -45,8 +45,8 @@ jobs:
         with:
           repository: cmdai-hq/homebrew-tap
           path: tap
-          # A dry run only reads the public tap: pull request code never gets the tap token.
-          token: ${{ github.event_name == 'pull_request' && github.token || secrets.HOMEBREW_TAP_TOKEN }}
+          # The build runs packages' build code: the tap token only reaches the last step.
+          persist-credentials: false
       - name: Choose the release
         id: release
         env:
@@ -120,6 +120,7 @@ jobs:
           branch="busy-crew-$VERSION"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
           git switch -C "$branch"
           git commit -am "busy-crew $VERSION"
           git push --force origin "$branch"  # This bot owns the branch; a re-run replaces its own commit.
