@@ -675,6 +675,52 @@ class PaceTests(unittest.TestCase):
         self.assertLessEqual(max(gaps(self.draws)), LEASE_RENEWAL)
 
 
+class AppModeServiceTests(unittest.TestCase):
+    """The collector in `display: app`: the app on the bar draws, so the collector must not."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.service = service_fixture(Path(directory.name))
+        self.service.display = "app"
+        self.ready = [Session("claude", "a", "ready", "r1")]
+        self.service.observer.poll = lambda: self.ready
+        self.installed = True
+        self.service.mailbox = SimpleNamespace(
+            app_installed=lambda: self.installed, error=None,
+            sync=MagicMock(side_effect=lambda *a: self.service.stop.set()),
+            acknowledged=MagicMock(return_value=[]))
+
+    def run_once(self):
+        self.statuses = []
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.write_json", side_effect=lambda path, data, **_: self.statuses.append(data)
+        ):
+            self.service.run()
+
+    def test_the_app_draws_and_the_collector_only_writes_the_mailbox(self):
+        self.run_once()
+        self.service.device.draw.assert_not_called()
+        sessions, errors, *_ = self.service.mailbox.sync.call_args.args
+        self.assertEqual(sessions, self.ready)
+        self.assertTrue(self.service.app_active)
+        self.assertEqual((self.statuses[0]["display"], self.statuses[0]["app_active"]), ("app", True))
+
+    def test_without_the_app_installed_the_collector_draws(self):
+        self.installed = False
+        self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+        self.run_once()
+        self.service.device.draw.assert_called_once()
+        self.service.mailbox.sync.assert_not_called()
+        self.assertFalse(self.service.app_active)
+
+    def test_an_ok_press_on_the_bar_acknowledges_through_the_observer(self):
+        self.service.mailbox.acknowledged.return_value = self.ready
+        self.run_once()
+        self.service.mailbox.acknowledged.assert_called_with(True)
+        self.service.observer.acknowledge.assert_called_once_with(self.ready)
+
+
 class PresentationContractTests(unittest.TestCase):
     def test_tokens_ack_has_no_results_unless_waiting_overrides_tokens(self):
         items = [session("claude", sid=str(i)) for i in range(7)]

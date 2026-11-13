@@ -129,6 +129,7 @@ busy-crew menubar install   # needs the Swift compiler: xcode-select --install
 | `ccusage` | Absolute path to `ccusage`, if the LaunchAgent cannot find it |
 | `token` | The password set for the bar's local Wi-Fi API; not needed over USB |
 | `update_check` | `false` stops the daily check for a new release on GitHub |
+| `display` | `overlay` (default): the collector draws on the bar. `app`: [Busy Crew's app on the bar](https://github.com/cmdai-hq/busy-crew/blob/main/docs/bar-app.md) draws, once installed from the BUSY Apps Catalog; set it with `busy-crew install --display app` |
 
 After editing `config.json`, choose **Reload collector** in the menu bar, or run:
 

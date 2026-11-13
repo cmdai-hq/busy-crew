@@ -9,10 +9,11 @@ Busy Crew runs on your Mac and talks to your BUSY Bar, at the address in `config
 | Your BUSY Bar | A 72 × 16 pixel frame, and requests to clear Busy Crew's own frame | HTTP on your network; Wi-Fi uses the local API password in a header, USB needs none |
 | Your BUSY Bar | A subscription to its button events (OK, Back, Start, the wheel, the selector) | WebSocket through the busylib SDK, which puts the key in the URL query |
 | Your BUSY Bar, only when you run `snapshot` | A request for the bar's current screen | HTTP, as above |
+| Your BUSY Bar, only with `"display": "app"` | A small `state.json` in the storage of Busy Crew's app on the bar: each session's family and state without its ID, source errors, and token totals. Written when they change, at most every 2 seconds, plus once a minute. Requests that read `ack.json`, which the app writes when you press OK, and that list the bar's installed apps once a minute | HTTP, as above |
 | GitHub (`api.github.com`), at most once a day | A request for Busy Crew's latest release, with Busy Crew's version in the `User-Agent` header. No data about your agents or your bar | HTTPS, without credentials. GitHub sees your IP address. `"update_check": false` in `config.json` turns it off |
 | Homebrew or PyPI, only when you choose **Update to X** in the menu bar icon or run `busy-crew upgrade` | What `brew upgrade` or `uv tool upgrade` sends to download the new version | Run by those tools |
 
-Nothing else leaves the Mac. Over plain HTTP, someone on your network could see the frames, which show agent counts and token totals, and the API key. Use a trusted network, or HTTPS if your device supports it.
+Nothing else leaves the Mac. Over plain HTTP, someone on your network could see the frames or `state.json`, which show agent counts, states and token totals, and the API key. `state.json` stays in the bar's storage, readable by anyone who can use the bar's API (over USB, that needs no password); it holds what the bar displays. Use a trusted network, or HTTPS if your device supports it.
 
 ## What is read
 

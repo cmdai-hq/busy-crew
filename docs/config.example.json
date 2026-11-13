@@ -2,5 +2,6 @@
   "address": "http://10.0.4.20",
   "timezone": "Europe/Paris",
   "ccusage": null,
-  "update_check": true
+  "update_check": true,
+  "display": "overlay"
 }

@@ -438,7 +438,7 @@ def _bootstrap(launchctl, domain, path, label=LABEL):
         raise RuntimeError("LaunchAgent was not loaded after bootstrap")
 
 
-def install(address=None, timezone=None, hooks=True, python=None):
+def install(address=None, timezone=None, hooks=True, python=None, display=None):
     python = interpreter(python)
     launchctl = _preflight(address, timezone, python)
     runtime = state_dir()
@@ -449,6 +449,9 @@ def install(address=None, timezone=None, hooks=True, python=None):
         config = dict(config)
         config["address"] = address if address is not None else config.get("address", "http://busybar.local")
         config["timezone"] = timezone if timezone is not None else config.get("timezone", "Europe/Paris")
+        config["display"] = display if display is not None else config.get("display", "overlay")
+        if config["display"] not in {"overlay", "app"}:
+            raise ValueError("Display must be overlay or app")
         _validate_address(config["address"])
         ZoneInfo(config["timezone"])
         if config.get("token") is not None and not isinstance(config["token"], str):

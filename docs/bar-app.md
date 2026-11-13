@@ -58,6 +58,12 @@ These come from tests on a BUSY Bar with firmware 1.4.1 (November 2026):
 
 Measured at that pace: no torn or missing read in 117 reads, writes answered in 56 ms or less.
 
+## Turning it on
+
+Install the app on the bar, then run `busy-crew install --display app` on the Mac (`--display overlay` goes back).
+The collector checks once a minute whether the app is installed: until it is, and after it is removed, it keeps
+drawing on the bar itself.
+
 ## Without a Mac
 
 The app plays a demo when no state arrives: before Busy Crew is installed on the Mac, and on firmware before 1.4,

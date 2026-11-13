@@ -42,6 +42,9 @@ def main():
     install = sub.add_parser("install")
     install.add_argument("--address", help="BUSY Bar URL; preserve existing address on reinstall")
     install.add_argument("--timezone", help="IANA time zone; preserve existing zone on reinstall")
+    install.add_argument("--display", choices=["overlay", "app"],
+                         help="overlay: the collector draws on the bar; app: Busy Crew's app on the bar draws, "
+                              "once installed from the BUSY Apps Catalog; preserve existing choice on reinstall")
     install.add_argument("--no-claude-hooks", action="store_true")
     python_help = "interpreter the LaunchAgents and hooks run; default: BUSY_CREW_PYTHON, else this one"
     install.add_argument("--python", help=python_help)
@@ -76,7 +79,7 @@ def main():
                 handler.close()
     elif args.command == "install":
         from .install import install
-        install(args.address, args.timezone, not args.no_claude_hooks, args.python)
+        install(args.address, args.timezone, not args.no_claude_hooks, args.python, args.display)
     elif args.command == "uninstall":
         from .install import uninstall
         uninstall()

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .device import DEFAULT_ADDRESS, Device
 from .health import code_fingerprint, health, menu_fingerprint
+from .mailbox import Mailbox
 from .model import layout
 from .observe import Observer
 from .render import render, visible_sessions
@@ -71,6 +72,7 @@ def configure_logging(runtime):
 class Service:
     # Code this process loaded; the menu bar offers a reload when it changes on disk.
     package_root = Path(__file__).parent
+    display, mailbox, app_active = "overlay", None, False
 
     def __init__(self, config=None):
         self.runtime = state_dir()
@@ -94,6 +96,11 @@ class Service:
         self.presented_sessions = []
         self.presented_until = 0
         self.last_control = None
+        # "app": Busy Crew's app on the bar draws the crew from a mailbox; "overlay": the collector draws it.
+        # app_active is True while that app is installed: the collector then neither draws nor reacts to the
+        # bar's buttons, which the app receives too.
+        if self.config.get("display") == "app":
+            self.display, self.mailbox = "app", Mailbox(self.device)
 
     def enqueue(self, command):
         if not isinstance(command, str) or command not in COMMANDS:
@@ -192,6 +199,8 @@ class Service:
                         if self.stop.is_set():
                             return
                         if not isinstance(message, dict):
+                            continue
+                        if self.app_active:
                             continue
                         for event in input_events(message):
                             if isinstance(event, ButtonEvent) and event.is_press:
@@ -331,7 +340,29 @@ class Service:
                         if last_frame is not None:
                             self.device.clear()
                             last_frame = None
+                    elif self.mailbox and self.mailbox.app_installed():
+                        if not self.app_active:
+                            LOG.info("Display: Busy Crew's app on the bar")
+                            self.app_active = True
+                        if last_frame is not None:  # Hand the screen over to the app.
+                            self.device.clear()
+                            last_frame = None
+                        presented = visible_sessions(self.sessions, "sessions", self.observer.errors)
+                        self.mailbox.sync(self.sessions, self.observer.errors, tokens, month, presented)
+                        self.presented_sessions = presented
+                        if self.mailbox.error is None:
+                            self.presented_until = time.time() + 15
+                        acked = self.mailbox.acknowledged(any(s.state == "ready" for s in presented))
+                        if acked:
+                            try:
+                                self.observer.acknowledge(acked)
+                            except (OSError, ValueError) as exc:
+                                LOG.warning("Acknowledgement could not be persisted: %s", type(exc).__name__)
+                        device_error = self.mailbox.error
                     else:
+                        if self.app_active:
+                            LOG.info("Display: drawn by the collector")
+                            self.app_active = False
                         changed = xpm != last_frame
                         if changed or now - last_draw >= LEASE_RENEWAL:
                             drawn_at = time.time()
@@ -363,6 +394,7 @@ class Service:
                     "menu_fingerprint": menu_source,
                     "version": self.updates.current, "latest_version": self.updates.available(),
                     "install_mode": self.install_mode,
+                    "display": self.display, "app_active": self.app_active,
                     "menubar_update_failed": (self.runtime / MENUBAR_FAILED).exists(),
                     # What OK would acknowledge now, so the menu never offers a silent no-op.
                     "acknowledgeable": sum(s.state == "ready" for s in self.presented_sessions)}
