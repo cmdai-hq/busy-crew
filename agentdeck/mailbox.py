@@ -76,6 +76,7 @@ class Mailbox:
         self.beat_at = float("-inf")  # When its beat last changed
         self.app_read_at = float("-inf")
         self.running = False
+        self.ended_run = None  # A launch the selector closed: its last record still says running.
         self.pending_ack = []
         self.history = {}  # seq → sessions presented in that write
 
@@ -136,11 +137,13 @@ class Mailbox:
             # it must show a new beat soon, while a launch seen happening gets the full timeout.
             self.beat_at = now - (ALIVE_TIMEOUT - FIRST_GRACE) if previous is None else now
             self.written = self.written_tokens = None
+            if record["run"] != self.ended_run:
+                self.ended_run = None
         elif record["beat"] != previous["beat"] or record["ack"] != previous["ack"]:
             self.beat_at = now
             if record["ack"] != previous["ack"]:
                 self.pending_ack = self.history.get(record["seq"], [])
-        self.running = record["running"]
+        self.running = record["running"] and record["run"] != self.ended_run
 
     def acknowledged(self):
         """The sessions an OK press on the bar acknowledged since the last call, or []."""
@@ -148,8 +151,12 @@ class Mailbox:
         return sessions
 
     def left(self):
-        """The bar's mode selector left Apps: the firmware closed the app without letting it say so."""
+        """The bar's mode selector left Apps: the firmware closed the app without letting it say so.
+
+        Its app.json keeps saying `running` until the next launch writes a new run: ignore that run from now on."""
         self.running = False
+        if self.app is not None:
+            self.ended_run = self.app["run"]
 
     def presented(self):
         """What the app shows now: the sessions of the last state written."""
@@ -162,6 +169,9 @@ class Mailbox:
         now = self.clock()
         body = payload(sessions, errors, tokens, month)
         crew = (body["sessions"], body["errors"])
+        # OK can only reach sessions the bar draws: those in the payload, which stops at MAX_SESSIONS.
+        published = {(s.provider, s.id) for s in ordered_sessions(sessions)[:MAX_SESSIONS]}
+        presented = [s for s in presented if (s.provider, s.id) in published]
         if crew == self.written:
             # Same picture, perhaps other results behind it (a ready session replaced by another): OK on this
             # picture means these. A changed picture keeps what the last write showed until the next write.

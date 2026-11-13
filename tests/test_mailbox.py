@@ -238,17 +238,33 @@ class MailboxTest(unittest.TestCase):
         self.assertEqual(len(body["sessions"]), mailbox.MAX_SESSIONS)
         self.assertEqual(body["sessions"][0], ["codex", "waiting"])
 
+    def test_ok_never_reaches_sessions_past_the_apps_limit(self):
+        self.app()
+        self.box.app_running(True)
+        many = crew(*["ready"] * 250)
+        self.box.sync(many, [], None, None, many)
+        self.assertEqual(self.box.presented(), many[:mailbox.MAX_SESSIONS])
+        self.app(ack=1, seq=self.state()["seq"])
+        self.later(mailbox.READ_ACK)
+        self.box.app_running(True)
+        self.assertEqual(self.box.acknowledged(), many[:mailbox.MAX_SESSIONS])
+
     def test_an_app_json_found_at_start_must_beat_soon(self):
         self.app(running=True)  # Left by an app that crashed: its beat will never move.
         self.assertTrue(self.box.app_running())
         self.later(mailbox.FIRST_GRACE + 1)
         self.assertFalse(self.box.app_running())
 
-    def test_leaving_apps_stops_following_the_app_at_once(self):
-        self.app()
+    def test_leaving_apps_stops_following_the_app_until_its_next_launch(self):
+        self.app(run=1)
         self.assertTrue(self.box.app_running())
         self.box.left()
         self.assertFalse(self.box.app_running())
+        self.later(mailbox.READ_IDLE)  # The closed app's record still says running.
+        self.assertFalse(self.box.app_running())
+        self.app(run=2)
+        self.later(mailbox.READ_IDLE)
+        self.assertTrue(self.box.app_running())
 
     def test_a_malformed_app_json_is_no_app(self):
         for raw in [b"{", b"[]", json.dumps({"schema": 1, "run": 1, "beat": 0, "running": True, "ack": 0,
