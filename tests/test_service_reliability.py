@@ -675,6 +675,79 @@ class PaceTests(unittest.TestCase):
         self.assertLessEqual(max(gaps(self.draws)), LEASE_RENEWAL)
 
 
+class AppModeServiceTests(unittest.TestCase):
+    """The collector in `display: app`: the app on the bar draws, so the collector must not."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.service = service_fixture(Path(directory.name))
+        self.service.display = "app"
+        self.ready = [Session("claude", "a", "ready", "r1")]
+        self.service.observer.poll = lambda: self.ready
+        self.installed = True
+        self.service.mailbox = SimpleNamespace(
+            app_running=MagicMock(side_effect=lambda acknowledgeable: self.installed), error=None,
+            presented=lambda: self.ready, left=MagicMock(),
+            sync=MagicMock(side_effect=lambda *a: self.service.stop.set()),
+            acknowledged=MagicMock(return_value=[]))
+
+    def run_once(self):
+        self.statuses = []
+        with patch("agentdeck.service.threading.Thread"), patch("agentdeck.service.signal.signal"), patch(
+            "agentdeck.service.write_json", side_effect=lambda path, data, **_: self.statuses.append(data)
+        ):
+            self.service.run()
+
+    def test_the_app_draws_and_the_collector_only_writes_the_mailbox(self):
+        self.run_once()
+        self.service.device.draw.assert_not_called()
+        sessions, errors, *_ = self.service.mailbox.sync.call_args.args
+        self.assertEqual(sessions, self.ready)
+        self.assertTrue(self.service.app_active)
+        self.assertEqual((self.statuses[0]["display"], self.statuses[0]["app_active"]), ("app", True))
+
+    def test_without_the_app_running_the_collector_draws(self):
+        self.installed = False
+        self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+        self.run_once()
+        self.service.device.draw.assert_called_once()
+        self.service.mailbox.sync.assert_not_called()
+        self.assertFalse(self.service.app_active)
+
+    def test_an_ok_press_on_the_bar_acknowledges_through_the_observer(self):
+        self.service.mailbox.acknowledged.return_value = self.ready
+        self.run_once()
+        self.service.mailbox.app_running.assert_called_with(True)  # Something ready: read app.json often.
+        self.service.observer.acknowledge.assert_called_once_with(self.ready)
+
+    def test_an_ok_press_sent_with_the_apps_goodbye_is_still_applied(self):
+        self.installed = False
+        self.service.mailbox.acknowledged.return_value = self.ready
+        self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+        self.run_once()
+        self.service.observer.acknowledge.assert_called_once_with(self.ready)
+
+    def test_leaving_apps_with_the_selector_hands_the_screen_back(self):
+        self.service.command("appleft")
+        self.service.mailbox.left.assert_called_once()
+
+    def test_a_pause_while_the_app_runs_does_not_stick(self):
+        self.service.app_active = True
+        self.service.paused = True
+        self.service.observer.poll = lambda: (self.service.stop.set(), self.ready)[1]  # One pass
+        self.run_once()
+        self.assertFalse(self.service.app_active)
+
+    def test_when_the_app_quits_the_collector_draws_again(self):
+        self.service.app_active = True
+        self.installed = False
+        self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+        self.run_once()
+        self.service.device.draw.assert_called_once()
+        self.assertFalse(self.service.app_active)
+
+
 class PresentationContractTests(unittest.TestCase):
     def test_tokens_ack_has_no_results_unless_waiting_overrides_tokens(self):
         items = [session("claude", sid=str(i)) for i in range(7)]

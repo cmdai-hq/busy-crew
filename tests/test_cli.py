@@ -40,8 +40,8 @@ class CliTests(unittest.TestCase):
             self.run_cli("install", "--python", "/fictional/python")
             self.run_cli("menubar", "install", "--python", "/fictional/python")
             self.run_cli("install")
-        self.assertEqual(install.call_args_list[0].args, (None, None, True, "/fictional/python"))
-        self.assertEqual(install.call_args_list[1].args, (None, None, True, None))
+        self.assertEqual(install.call_args_list[0].args, (None, None, True, "/fictional/python", None))
+        self.assertEqual(install.call_args_list[1].args, (None, None, True, None, None))
         menubar.assert_called_once_with("/fictional/python")
 
     def test_status_omits_conversation_identity(self):

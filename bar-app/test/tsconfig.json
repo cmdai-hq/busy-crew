@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "types": ["node"], "lib": ["es2022"] },
+  "include": ["./", "../src/render.ts", "../src/mailbox.ts"]
+}
