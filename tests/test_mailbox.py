@@ -218,6 +218,38 @@ class MailboxTest(unittest.TestCase):
         self.box.app_running(True)
         self.assertEqual(self.box.acknowledged(), newer)
 
+    def test_an_ok_press_on_an_older_picture_never_reaches_newer_results(self):
+        self.app()
+        self.box.app_running(True)
+        shown = crew("ready", "working")
+        self.sync(shown)
+        seq = self.state()["seq"]
+        self.later(1)  # Within the minimum interval: the new picture is not written yet.
+        newer = crew("ready", "ready")
+        self.assertFalse(self.sync(newer))
+        self.app(ack=1, seq=seq)
+        self.later(mailbox.READ_ACK)
+        self.box.app_running(True)
+        self.assertEqual(self.box.acknowledged(), shown)
+        self.assertEqual(self.box.presented(), shown)
+
+    def test_the_session_list_stops_at_the_apps_limit(self):
+        body = payload(crew(*["idle"] * 250) + crew("waiting", provider="codex"), [], None, None)
+        self.assertEqual(len(body["sessions"]), mailbox.MAX_SESSIONS)
+        self.assertEqual(body["sessions"][0], ["codex", "waiting"])
+
+    def test_an_app_json_found_at_start_must_beat_soon(self):
+        self.app(running=True)  # Left by an app that crashed: its beat will never move.
+        self.assertTrue(self.box.app_running())
+        self.later(mailbox.FIRST_GRACE + 1)
+        self.assertFalse(self.box.app_running())
+
+    def test_leaving_apps_stops_following_the_app_at_once(self):
+        self.app()
+        self.assertTrue(self.box.app_running())
+        self.box.left()
+        self.assertFalse(self.box.app_running())
+
     def test_a_malformed_app_json_is_no_app(self):
         for raw in [b"{", b"[]", json.dumps({"schema": 1, "run": 1, "beat": 0, "running": True, "ack": 0,
                                              "seq": [1]}).encode()]:

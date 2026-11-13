@@ -14,15 +14,16 @@ const POLL_SECONDS = 2;
 const STALE_SECONDS = 180;
 /** app.json is refreshed this often, so the Mac knows the app still runs. */
 const BEAT_SECONDS = 60;
-/** A read still pending after this long is given up, so a stuck request cannot freeze the picture. */
-const READ_TIMEOUT = 10;
+/** Writes to the bar's storage stay at least this far apart (a burst of writes once hung a bar's web server). */
+const WRITE_SPACING_MS = 2000;
+const MAX_DRAW_BACKOFF = 30;
 const VIEWS: View[] = ["sessions", "tokens", "month"];
 
 type Mode = "demo" | "live" | "offline" | "update";
 
 let mode: Mode = "demo";
 let snapshot: Snapshot | null = null;
-let seenAt = 0; // `clock` when the state shown was written
+let seenAt = 0; // `clock` when the state shown was written (negative when it was written before the app started)
 let clock = 0; // seconds since start, from the app's own timer: no wall clock to jump
 let barTime: number | null = null; // the bar's Unix time at clock 0, to tell how old a state is
 let view: View = "sessions";
@@ -67,21 +68,31 @@ const BACK: Record<Mode, [string, string, string]> = {
   update: ["Update this app", "Your Mac runs a newer", "Busy Crew"],
 };
 
+/** What is on the front screen now: OK acknowledges this, never a state still on its way. */
+type Shown = { mode: Mode; view: View; snapshot: Snapshot | null };
+let shown: Shown | null = null;
+
 let drawing = false;
 let dirty = false;
 let shownFront = "";
 let shownBack: Mode | null = null;
+let drawBackoff = 0;
+let drawAgainAt = 0; // `clock` before which a failed draw is not retried
 
 /** Sends what changed, one request at a time; a change made meanwhile is sent once the request ends. */
 function draw(): void {
-  if (stopped) return;
+  if (stopped || clock < drawAgainAt) return;
   if (drawing) {
     dirty = true;
     return;
   }
   const front = render(scene());
+  const showing: Shown = { mode, view, snapshot };
   const back = shownBack === mode ? null : mode;
-  if (front === shownFront && back === null) return;
+  if (front === shownFront && back === null) {
+    shown = showing; // The same pixels: the screen shows this state too.
+    return;
+  }
   const elements: object[] = [];
   if (front !== shownFront) elements.push({ id: "crew", type: "xpmbitmap", display: "front", x: 0, y: 0, data: front });
   if (back) {
@@ -97,10 +108,17 @@ function draw(): void {
     .then(
       () => {
         shownFront = front;
+        shown = showing;
         if (back) shownBack = back;
+        drawBackoff = 0;
         recover("draw");
       },
-      (err: unknown) => fail("draw", err),
+      (err: unknown) => {
+        // Retry later, not at once: a display that keeps failing must not keep the web server busy.
+        drawBackoff = Math.min(Math.max(drawBackoff * 2, 2), MAX_DRAW_BACKOFF);
+        drawAgainAt = clock + drawBackoff;
+        fail("draw", err);
+      },
     )
     .then(() => {
       drawing = false;
@@ -110,12 +128,17 @@ function draw(): void {
 
 // ---------- The Mac's state ----------
 
-let reading = 0; // `clock` when the pending read started, 0 when none
-let readGeneration = 0;
+/** When the state was written, on the app's clock, if both clocks are known; otherwise now. */
+function writtenAt(state: Snapshot): number {
+  return barTime !== null && state.at !== null ? Math.min(clock, state.at - barTime) : clock;
+}
 
-async function readState(generation: number): Promise<void> {
+function updateMode(): void {
+  if (mode === "live" || mode === "offline") mode = clock - seenAt < STALE_SECONDS ? "live" : "offline";
+}
+
+async function readState(): Promise<void> {
   const res = await fetch(`${STORAGE}/read?path=${STATE_FILE}`);
-  if (generation !== readGeneration) return; // Given up meanwhile.
   if (res.status === 403) {
     // Firmware before 1.4 gives apps no storage: nothing will ever arrive, so stop asking and keep the demo.
     polling = false;
@@ -124,7 +147,6 @@ async function readState(generation: number): Promise<void> {
   }
   if (!res.ok) return; // No state yet: the Mac has not written one. A live crew goes stale on its own.
   const parsed = parse(await res.text());
-  if (generation !== readGeneration) return;
   if (parsed.kind === "newer") {
     mode = "update";
     return;
@@ -135,31 +157,39 @@ async function readState(generation: number): Promise<void> {
   }
   recover("state");
   const next = parsed.snapshot;
-  if (!snapshot || next.seq !== snapshot.seq) {
-    // How old the state already is, when both clocks are known: a Mac that slept for hours is offline at once.
-    const age = barTime !== null && next.at !== null ? Math.max(0, barTime + clock - next.at) : 0;
-    seenAt = clock - age;
-  }
+  if (!snapshot || next.seq !== snapshot.seq) seenAt = writtenAt(next);
   snapshot = next;
-  mode = clock - seenAt < STALE_SECONDS ? "live" : "offline";
+  if (mode === "demo" || mode === "update") mode = "live"; // A state this app reads, after none or a newer one
+  updateMode();
 }
 
+let reading = false;
+
+/** One read at a time. A read that never answers is waited for, never doubled: the crew goes offline meanwhile. */
 function poll(): void {
-  if (!polling) return;
-  if (reading) {
-    if (clock - reading < READ_TIMEOUT) return;
-    readGeneration += 1; // The stuck read's answer, if it ever comes, is ignored.
-    fail("read", "no answer");
-  }
-  reading = clock || 1;
-  const generation = readGeneration;
-  readState(generation)
+  if (!polling || reading) return;
+  reading = true;
+  readState()
     .then(() => recover("read"), (err: unknown) => fail("read", err))
     .then(() => {
-      if (generation !== readGeneration) return;
-      reading = 0;
+      reading = false;
       draw();
     });
+}
+
+function readBarTime(): void {
+  fetch("http://localhost/api/time")
+    .then((res) => res.json() as Promise<{ timestamp?: unknown }>)
+    .then((data) => {
+      const ms = typeof data.timestamp === "string" ? Date.parse(data.timestamp) : NaN;
+      if (isNaN(ms)) return;
+      barTime = Math.floor(ms / 1000) - clock;
+      // A state read before the time arrived was taken as new: date it properly now.
+      if (snapshot) seenAt = Math.min(seenAt, writtenAt(snapshot));
+      updateMode();
+      draw();
+    })
+    .catch((err: unknown) => fail("time", err));
 }
 
 // ---------- What the app tells the Mac: app.json ----------
@@ -170,16 +200,28 @@ let running = true;
 let acks = 0;
 let ackSeq = 0;
 let writing = false;
-let rewrite = false;
+let writeDue = false;
+let lastWrite = -WRITE_SPACING_MS;
+let writeTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** One write at a time; a change made meanwhile is written once it ends, so OK presses cannot pile up. */
+/**
+ * Writes app.json: one write at a time, at least WRITE_SPACING_MS apart, the latest record winning.
+ * A pending timer keeps the app alive until the last record, such as the goodbye on quit, is written.
+ */
 function writeApp(): void {
-  if (writing) {
-    rewrite = true;
+  writeDue = true;
+  if (writing || writeTimer !== undefined) return;
+  const wait = lastWrite + WRITE_SPACING_MS - Date.now();
+  if (wait > 0) {
+    writeTimer = setTimeout(() => {
+      writeTimer = undefined;
+      writeApp();
+    }, wait);
     return;
   }
   writing = true;
-  rewrite = false;
+  writeDue = false;
+  lastWrite = Date.now();
   fetch(`${STORAGE}/write?path=${APP_FILE}`, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
@@ -191,18 +233,18 @@ function writeApp(): void {
     )
     .then(() => {
       writing = false;
-      if (rewrite) writeApp();
+      if (writeDue) writeApp();
     });
 }
 
 /** OK acknowledges what is on screen, as on the Mac: only the live crew, and only finished responses. */
 function acknowledge(): void {
-  if (mode !== "live" || !snapshot) return;
-  const sessions = snapshot.sessions;
-  if (view !== "sessions" && !sessions.some((s) => s.state === "waiting")) return; // Tokens on screen
+  if (!shown || shown.mode !== "live" || !shown.snapshot) return;
+  const sessions = shown.snapshot.sessions;
+  if (shown.view !== "sessions" && !sessions.some((s) => s.state === "waiting")) return; // Tokens on screen
   if (!sessions.some((s) => s.state === "ready")) return;
   acks += 1;
-  ackSeq = snapshot.seq;
+  ackSeq = shown.snapshot.seq;
   writeApp();
 }
 
@@ -211,24 +253,16 @@ function announce(): void {
   fetch(`${STORAGE}/read?path=${APP_FILE}`)
     .then((res) => (res.ok ? res.text().then((text) => (acks = previousAcks(text))) : undefined))
     .catch((err: unknown) => fail("app", err))
-    .then(writeApp);
-}
-
-function readBarTime(): void {
-  fetch("http://localhost/api/time")
-    .then((res) => res.json() as Promise<{ timestamp?: unknown }>)
-    .then((data) => {
-      const ms = typeof data.timestamp === "string" ? Date.parse(data.timestamp) : NaN;
-      if (!isNaN(ms)) barTime = Math.floor(ms / 1000) - clock;
-    })
-    .catch((err: unknown) => fail("time", err));
+    .then(() => {
+      if (polling && !stopped) writeApp();
+    });
 }
 
 // ---------- Life cycle ----------
 
 function tick(): void {
   clock += 1;
-  if (mode === "live" && clock - seenAt >= STALE_SECONDS) mode = "offline";
+  updateMode();
   if (mode === "demo" && view === "sessions" && --demoLeft <= 0) {
     demoIndex = (demoIndex + 1) % DEMO.length;
     demoLeft = DEMO[demoIndex].seconds;
@@ -237,12 +271,8 @@ function tick(): void {
     beat += 1;
     writeApp();
   }
-  // A poll draws when it ends; otherwise draw, which sends nothing unless the picture changed.
-  if (clock % POLL_SECONDS === 0 && polling && !reading) poll();
-  else {
-    if (reading) poll(); // Gives up a stuck read.
-    draw();
-  }
+  if (clock % POLL_SECONDS === 0) poll(); // Draws when the read ends.
+  draw(); // Sends nothing unless the picture changed: the walking dot, the demo, going offline.
 }
 
 function main(): void {

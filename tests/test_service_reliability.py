@@ -688,6 +688,7 @@ class AppModeServiceTests(unittest.TestCase):
         self.installed = True
         self.service.mailbox = SimpleNamespace(
             app_running=MagicMock(side_effect=lambda acknowledgeable: self.installed), error=None,
+            presented=lambda: self.ready, left=MagicMock(),
             sync=MagicMock(side_effect=lambda *a: self.service.stop.set()),
             acknowledged=MagicMock(return_value=[]))
 
@@ -719,6 +720,24 @@ class AppModeServiceTests(unittest.TestCase):
         self.run_once()
         self.service.mailbox.app_running.assert_called_with(True)  # Something ready: read app.json often.
         self.service.observer.acknowledge.assert_called_once_with(self.ready)
+
+    def test_an_ok_press_sent_with_the_apps_goodbye_is_still_applied(self):
+        self.installed = False
+        self.service.mailbox.acknowledged.return_value = self.ready
+        self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+        self.run_once()
+        self.service.observer.acknowledge.assert_called_once_with(self.ready)
+
+    def test_leaving_apps_with_the_selector_hands_the_screen_back(self):
+        self.service.command("appleft")
+        self.service.mailbox.left.assert_called_once()
+
+    def test_a_pause_while_the_app_runs_does_not_stick(self):
+        self.service.app_active = True
+        self.service.paused = True
+        self.service.observer.poll = lambda: (self.service.stop.set(), self.ready)[1]  # One pass
+        self.run_once()
+        self.assertFalse(self.service.app_active)
 
     def test_when_the_app_quits_the_collector_draws_again(self):
         self.service.app_active = True

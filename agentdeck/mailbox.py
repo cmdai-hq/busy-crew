@@ -23,6 +23,8 @@ READ_ACK, READ_RUNNING, READ_IDLE = 2, 5, 10
 SLOW = 2  # A request slower than this backs off as if it failed.
 MAX_BACKOFF = 30
 HISTORY = 8  # Recent writes whose crew an OK press may still refer to.
+MAX_SESSIONS = 200  # The app rejects a longer list; the most urgent come first, and the bar shows 99+ anyway.
+FIRST_GRACE = 75  # An app.json found at start, its age unknown, counts as running this long without a new beat.
 
 
 def _counts(values):
@@ -35,7 +37,7 @@ def payload(sessions, errors, tokens, month):
     """Everything the app needs to draw, without IDs, titles or text."""
     return {
         "schema": SCHEMA,
-        "sessions": [[s.provider, s.state] for s in ordered_sessions(sessions)],
+        "sessions": [[s.provider, s.state] for s in ordered_sessions(sessions)[:MAX_SESSIONS]],
         "errors": [name for name in ("claude", "codex", "state") if name in errors],
         "tokens": _counts(tokens),
         "month": _counts(month),
@@ -130,7 +132,9 @@ class Mailbox:
         if previous is None or record["run"] != previous["run"]:
             # A launch, or the first look since the collector started. Its OK count is a baseline,
             # and its storage may be fresh (a reinstall wipes it): the crew is written again.
-            self.beat_at = now
+            # A record already there when the collector starts may be left by an app that crashed:
+            # it must show a new beat soon, while a launch seen happening gets the full timeout.
+            self.beat_at = now - (ALIVE_TIMEOUT - FIRST_GRACE) if previous is None else now
             self.written = self.written_tokens = None
         elif record["beat"] != previous["beat"] or record["ack"] != previous["ack"]:
             self.beat_at = now
@@ -143,18 +147,27 @@ class Mailbox:
         sessions, self.pending_ack = self.pending_ack, []
         return sessions
 
+    def left(self):
+        """The bar's mode selector left Apps: the firmware closed the app without letting it say so."""
+        self.running = False
+
+    def presented(self):
+        """What the app shows now: the sessions of the last state written."""
+        return list(self.history.get(self.seq, []))
+
     # ---------- The collector's side: state.json ----------
 
     def sync(self, sessions, errors, tokens, month, presented):
         """Writes the state when it is due. Returns True when a write happened."""
         now = self.clock()
-        if self.written is not None:
-            # The same crew may hold other results (a ready session replaced by another): OK must find these.
+        body = payload(sessions, errors, tokens, month)
+        crew = (body["sessions"], body["errors"])
+        if crew == self.written:
+            # Same picture, perhaps other results behind it (a ready session replaced by another): OK on this
+            # picture means these. A changed picture keeps what the last write showed until the next write.
             self.history[self.seq] = list(presented)
         if not self.ready():
             return False
-        body = payload(sessions, errors, tokens, month)
-        crew = (body["sessions"], body["errors"])
         counts = (body["tokens"], body["month"])
         known = self.written_tokens is not None and any(
             v is not None for part in self.written_tokens if part for v in part.values())

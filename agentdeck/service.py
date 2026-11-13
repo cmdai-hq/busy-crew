@@ -28,7 +28,7 @@ MAX_COMMAND_BYTES = 65536
 MAX_COMMANDS_PER_POLL = 128
 # Start / Pause cycles through the views; the scroll wheel steps along them without wrapping.
 VIEWS = ["sessions", "tokens", "month"]
-COMMANDS = {*VIEWS, "toggle", "next", "previous", "ack", "pause", "resume", "refresh"}
+COMMANDS = {*VIEWS, "toggle", "next", "previous", "ack", "pause", "resume", "refresh", "appleft"}
 # Seconds between polls. A session at work, or one that just changed, is followed every second.
 # At rest the poll still runs often enough for status.json to look alive to `busy-crew status`
 # (5 s) and the menu (10 s), and every other poll renews the bar's lease.
@@ -132,6 +132,9 @@ class Service:
         elif command in {"next", "previous"}:
             step = 1 if command == "next" else -1
             self.view = VIEWS[min(max(VIEWS.index(self.view) + step, 0), len(VIEWS) - 1)]
+        elif command == "appleft":
+            if self.mailbox:
+                self.mailbox.left()
         elif command == "ack":
             if not self.paused and time.time() < self.presented_until and self.presented_sessions:
                 try:
@@ -200,14 +203,16 @@ class Service:
                             return
                         if not isinstance(message, dict):
                             continue
-                        if self.app_active:
-                            continue
                         for event in input_events(message):
+                            if self.app_active and not isinstance(event, SelectorEvent):
+                                continue  # The app has the buttons and the wheel.
                             if isinstance(event, ButtonEvent) and event.is_press:
                                 self.enqueue({"start": "toggle", "back": "sessions", "ok": "ack"}[event.button])
                             elif isinstance(event, EncoderEvent) and event.delta:
                                 self.enqueue("next" if event.delta > 0 else "previous")
                             elif isinstance(event, SelectorEvent):
+                                if self.app_active and event.position != "apps":
+                                    self.enqueue("appleft")  # Leaving Apps closes the app: draw again at once.
                                 self.enqueue("pause" if event.position in {"off", "settings"} else "resume")
             except Exception as exc:
                 self.inputs_error = type(exc).__name__
@@ -337,6 +342,9 @@ class Service:
                 try:
                     if self.paused:
                         self.presented_sessions = []
+                        if self.app_active:  # The selector left Apps, which closed the app.
+                            LOG.info("Display: drawn by the collector")
+                            self.app_active = False
                         if last_frame is not None:
                             self.device.clear()
                             last_frame = None
@@ -350,15 +358,10 @@ class Service:
                             last_frame = None
                         presented = visible_sessions(self.sessions, "sessions", self.observer.errors)
                         self.mailbox.sync(self.sessions, self.observer.errors, tokens, month, presented)
-                        self.presented_sessions = presented
+                        # Only what reached the bar can be acknowledged, also by `busy-crew ack`.
+                        self.presented_sessions = self.mailbox.presented()
                         if self.mailbox.error is None:
                             self.presented_until = time.time() + 15
-                        acked = self.mailbox.acknowledged()
-                        if acked:
-                            try:
-                                self.observer.acknowledge(acked)
-                            except (OSError, ValueError) as exc:
-                                LOG.warning("Acknowledgement could not be persisted: %s", type(exc).__name__)
                         device_error = self.mailbox.error
                     else:
                         if self.app_active:
@@ -373,6 +376,13 @@ class Service:
                             if changed:  # A lease renewal resends the same pixels.
                                 write_bytes(self.runtime / "front.png", frame.png(), durable=False)
                         self.presented_sessions = visible_sessions(self.sessions, self.view, self.observer.errors)
+                    # An OK press may arrive in the same app.json as the app's goodbye: apply it in any branch.
+                    acked = self.mailbox.acknowledged() if self.mailbox else []
+                    if acked:
+                        try:
+                            self.observer.acknowledge(acked)
+                        except (OSError, ValueError) as exc:
+                            LOG.warning("Acknowledgement could not be persisted: %s", type(exc).__name__)
                 except Exception as exc:
                     device_error = type(exc).__name__
                     # Failed frames retry next poll and the device lease expires after 15s.

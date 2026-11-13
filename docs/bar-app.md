@@ -31,7 +31,8 @@ it only while it reads a fresh `app.json` there, which proves the path and that 
  "month": {"claude": 4545810701, "codex": 3942831}}
 ```
 
-- `sessions`: most urgent first, as `agentdeck.render.ordered_sessions` orders them. No IDs, titles or text.
+- `sessions`: most urgent first, as `agentdeck.render.ordered_sessions` orders them, at most 200. No IDs, titles or
+  text.
 - `errors`: sources the collector cannot read: `claude`, `codex`, or `state` for its own ledgers.
 - `tokens`, `month`: today's and this month's totals per family, or `null` while unknown.
 - `seq` grows with every write. The collector rewrites the file at least once a minute; the app shows the crew as
@@ -44,16 +45,20 @@ it only while it reads a fresh `app.json` there, which proves the path and that 
 
 `{"schema": 1, "run": 123456, "beat": 7, "running": true, "ack": 3, "seq": 42}`, written at launch, every minute
 (`beat` grows), when OK is pressed (`ack` grows, `seq` names the state on screen) and when Back quits
-(`running: false`). One write at a time: OK presses cannot pile up requests.
+(`running: false`). One write at a time, at least 2 s apart, the latest record winning: OK presses cannot pile up
+requests.
 
 - The collector draws itself unless the app runs: `running` is true and `beat` or `ack` changed within 150 s. Back
-  hands the screen back within 5 s; a quit the app cannot announce (Back held, a reboot) within 150 s.
+  hands the screen back within 5 s, and so does turning the mode selector away from Apps (the collector sees it on
+  the bar's event stream). A quit the app cannot announce (Back held, a reboot) takes up to 150 s; a record found
+  when the collector starts, whose age is unknown, must show a new beat within 75 s.
 - A new `run` is a launch: its `ack` is a baseline, never an OK press, and the collector writes the crew again at
   once, since a reinstall wipes the app's storage. The app continues its OK count from the previous launch's file,
   so a repeated `run` never hides a press.
 - OK acknowledges what is on screen, as in direct mode: only the live crew view (or any view while an agent waits),
-  only finished responses. The collector acknowledges the sessions it presented in write `seq`, refreshed while
-  the picture stays the same.
+  only finished responses, and only a state the app has drawn. The collector acknowledges the sessions it presented
+  in write `seq`: refreshed while the picture stays the same, never extended to results a newer picture would show.
+  `busy-crew ack` acknowledges the last state written, too.
 
 ## Rules the bar imposes
 
@@ -98,4 +103,5 @@ npx busy-cli app install --addr 127.0.0.1:8640 && npx busy-cli app run --addr 12
 ```
 
 While the app runs, the collector in direct mode also draws: stop it for a clean test
-(`launchctl bootout gui/$UID/local.busybar.agent-deck`, then `launchctl bootstrap` to restart it).
+(`launchctl bootout gui/$UID/local.busybar.agent-deck`, then
+`launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.busybar.agent-deck.plist` to restart it).

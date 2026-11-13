@@ -40,7 +40,7 @@ packages = ["agentdeck"]
 
 [tool.hatch.build.targets.sdist]
 # The BUSY Bar app is published through the BUSY Apps Catalog, not PyPI.
-exclude = ["bar-app"]
+exclude = ["bar-app", "tests/test_bar_app.py", "scripts/render_fixtures.py"]
 
 [dependency-groups]
 dev = [
