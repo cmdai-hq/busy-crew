@@ -7,7 +7,7 @@
   as the collector. `busy-crew install --display app` makes the collector write
   the crew's state into the app's storage instead of drawing, and leave the bar's
   buttons to the app. OK on the bar acknowledges finished responses as before.
-  Without the app installed, the collector keeps drawing. The app plays a demo
+  Whenever the app is not running, the collector draws. The app plays a demo
   when no Mac sends a state, including on firmware before 1.4.
 
 ## 1.1.5 — 2026-10-15

@@ -687,7 +687,7 @@ class AppModeServiceTests(unittest.TestCase):
         self.service.observer.poll = lambda: self.ready
         self.installed = True
         self.service.mailbox = SimpleNamespace(
-            app_installed=lambda: self.installed, error=None,
+            app_running=MagicMock(side_effect=lambda acknowledgeable: self.installed), error=None,
             sync=MagicMock(side_effect=lambda *a: self.service.stop.set()),
             acknowledged=MagicMock(return_value=[]))
 
@@ -706,7 +706,7 @@ class AppModeServiceTests(unittest.TestCase):
         self.assertTrue(self.service.app_active)
         self.assertEqual((self.statuses[0]["display"], self.statuses[0]["app_active"]), ("app", True))
 
-    def test_without_the_app_installed_the_collector_draws(self):
+    def test_without_the_app_running_the_collector_draws(self):
         self.installed = False
         self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
         self.run_once()
@@ -717,8 +717,16 @@ class AppModeServiceTests(unittest.TestCase):
     def test_an_ok_press_on_the_bar_acknowledges_through_the_observer(self):
         self.service.mailbox.acknowledged.return_value = self.ready
         self.run_once()
-        self.service.mailbox.acknowledged.assert_called_with(True)
+        self.service.mailbox.app_running.assert_called_with(True)  # Something ready: read app.json often.
         self.service.observer.acknowledge.assert_called_once_with(self.ready)
+
+    def test_when_the_app_quits_the_collector_draws_again(self):
+        self.service.app_active = True
+        self.installed = False
+        self.service.device.draw.side_effect = lambda frame: self.service.stop.set()
+        self.run_once()
+        self.service.device.draw.assert_called_once()
+        self.assertFalse(self.service.app_active)
 
 
 class PresentationContractTests(unittest.TestCase):

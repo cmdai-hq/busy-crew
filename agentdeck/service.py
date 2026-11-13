@@ -97,8 +97,8 @@ class Service:
         self.presented_until = 0
         self.last_control = None
         # "app": Busy Crew's app on the bar draws the crew from a mailbox; "overlay": the collector draws it.
-        # app_active is True while that app is installed: the collector then neither draws nor reacts to the
-        # bar's buttons, which the app receives too.
+        # app_active is True while that app runs (its app.json is fresh): the collector then neither draws nor
+        # reacts to the bar's buttons, which the app receives too. Otherwise it draws as in overlay.
         if self.config.get("display") == "app":
             self.display, self.mailbox = "app", Mailbox(self.device)
 
@@ -340,7 +340,8 @@ class Service:
                         if last_frame is not None:
                             self.device.clear()
                             last_frame = None
-                    elif self.mailbox and self.mailbox.app_installed():
+                    elif self.mailbox and self.mailbox.app_running(any(
+                            s.state == "ready" for s in visible_sessions(self.sessions, "sessions", self.observer.errors))):
                         if not self.app_active:
                             LOG.info("Display: Busy Crew's app on the bar")
                             self.app_active = True
@@ -352,7 +353,7 @@ class Service:
                         self.presented_sessions = presented
                         if self.mailbox.error is None:
                             self.presented_until = time.time() + 15
-                        acked = self.mailbox.acknowledged(any(s.state == "ready" for s in presented))
+                        acked = self.mailbox.acknowledged()
                         if acked:
                             try:
                                 self.observer.acknowledge(acked)

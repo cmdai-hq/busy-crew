@@ -65,16 +65,6 @@ class Device:
                 return None
             raise
 
-    def storage_list(self, path):
-        """Names in a folder, or None when it does not exist."""
-        try:
-            listing = json.loads(self.request("/api/storage/list?" + urlencode({"path": path}, safe="/")))
-        except urllib.error.HTTPError as exc:
-            if exc.code == 400:
-                return None
-            raise
-        return {entry.get("name") for entry in listing.get("list", []) if isinstance(entry, dict)}
-
     def screen(self):
         raw = base64.b64decode(self.request("/api/screen?display=0"), validate=True)
         if len(raw) != 72 * 16 * 3:

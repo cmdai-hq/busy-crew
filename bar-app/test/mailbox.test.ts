@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parse } from "../src/mailbox.ts";
+import { appRecord, parse, previousAcks } from "../src/mailbox.ts";
 
 const good = {
-  schema: 1, seq: 7,
+  schema: 1, seq: 7, at: 1_800_000_000,
   sessions: [["claude", "waiting"], ["codex", "working"]],
   errors: ["codex", "bogus"],
   tokens: { claude: 12, codex: -1 },
@@ -15,6 +15,7 @@ test("reads a valid state", () => {
   assert.equal(parsed.kind, "ok");
   if (parsed.kind !== "ok") return;
   assert.equal(parsed.snapshot.seq, 7);
+  assert.equal(parsed.snapshot.at, 1_800_000_000);
   assert.deepEqual(parsed.snapshot.sessions, [
     { provider: "claude", state: "waiting" },
     { provider: "codex", state: "working" },
@@ -46,4 +47,18 @@ test("rejects bad sessions", () => {
 
 test("a newer schema asks for an app update", () => {
   assert.equal(parse(JSON.stringify({ ...good, schema: 2 })).kind, "newer");
+});
+
+test("a state without a valid time is still read, its age unknown", () => {
+  for (const at of [undefined, "soon", -5, 1.5]) {
+    const parsed = parse(JSON.stringify({ ...good, at }));
+    assert.equal(parsed.kind === "ok" && parsed.snapshot.at, null);
+  }
+});
+
+test("the OK count carries over from the previous launch", () => {
+  const record = appRecord({ run: 1, beat: 3, running: false, ack: 9, seq: 7 });
+  assert.deepEqual(JSON.parse(record), { schema: 1, run: 1, beat: 3, running: false, ack: 9, seq: 7 });
+  assert.equal(previousAcks(record), 9);
+  for (const text of ["", "{", "null", '{"schema":2,"ack":4}', '{"schema":1,"ack":-1}']) assert.equal(previousAcks(text), 0, text);
 });

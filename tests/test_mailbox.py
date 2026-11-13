@@ -1,27 +1,34 @@
-"""The mailbox to the bar app: what it writes, how often, and how it reads OK presses back. No device is contacted."""
+"""The mailbox to the bar app: what it writes, how often, and how it follows the app. No device is contacted."""
 import json
 import unittest
 import urllib.error
 
 from agentdeck import mailbox
-from agentdeck.mailbox import ACK, APP_ID, STATE, TEMP, Mailbox, payload
+from agentdeck.mailbox import APP, STATE, TEMP, Mailbox, payload
 from agentdeck.model import Session
 
 
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
 class FakeBar:
-    """A bar's storage API in memory, with a clock the test advances."""
+    """A bar's storage API in memory, on the test's clock."""
 
     def __init__(self, clock):
         self.clock = clock
         self.files = {}
         self.calls = []
         self.fail = None
-        self.delay = 0
-        self.apps = {APP_ID}
+        self.delays = {}
 
     def _call(self, name):
         self.calls.append(name)
-        self.clock.now += self.delay
+        self.clock.now += self.delays.get(name, 0)
         if self.fail:
             raise self.fail
 
@@ -37,34 +44,31 @@ class FakeBar:
         self._call("read")
         return self.files.get(path)
 
-    def storage_list(self, path):
-        self._call("list")
-        return set(self.apps)
 
-
-class Clock:
-    def __init__(self):
-        self.now = 1000.0
-
-    def __call__(self):
-        return self.now
-
-
-def crew(*states, provider="claude"):
-    return [Session(provider, f"{i:04d}", state, "v") for i, state in enumerate(states)]
+def crew(*states, provider="claude", version="v"):
+    return [Session(provider, f"{i:04d}", state, version) for i, state in enumerate(states)]
 
 
 class MailboxTest(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
         self.bar = FakeBar(self.clock)
-        self.box = Mailbox(self.bar, clock=self.clock)
+        self.box = Mailbox(self.bar, clock=self.clock, wall=lambda: 1_800_000_000)
 
     def state(self):
         return json.loads(self.bar.files[STATE])
 
     def sync(self, sessions, tokens=None, errors=()):
         return self.box.sync(sessions, list(errors), tokens, None, sessions)
+
+    def app(self, run=1, beat=0, running=True, ack=0, seq=0):
+        self.bar.files[APP] = json.dumps(
+            {"schema": 1, "run": run, "beat": beat, "running": running, "ack": ack, "seq": seq}).encode()
+
+    def later(self, seconds):
+        self.clock.now += seconds
+
+    # ---------- state.json ----------
 
     def test_payload_has_no_ids_and_puts_the_most_urgent_first(self):
         body = payload(crew("ready", "waiting") + crew("working", provider="codex"), ["codex", "elsewhere"],
@@ -74,47 +78,48 @@ class MailboxTest(unittest.TestCase):
         self.assertEqual(body["tokens"], {"claude": 5, "codex": None})
         self.assertNotIn("0000", json.dumps(body))
 
-    def test_writes_whole_files_through_a_rename(self):
+    def test_writes_whole_files_through_a_rename_with_the_time(self):
         self.assertTrue(self.sync(crew("working")))
         self.assertEqual(self.bar.calls, ["write", "rename"])
         self.assertNotIn(TEMP, self.bar.files)
         self.assertEqual(self.state()["sessions"], [["claude", "working"]])
+        self.assertEqual(self.state()["at"], 1_800_000_000)
 
     def test_never_writes_twice_within_the_minimum_interval(self):
         self.sync(crew("working"))
-        self.clock.now += 1
+        self.later(1)
         self.assertFalse(self.sync(crew("ready")))
-        self.clock.now += 1
+        self.later(1)
         self.assertTrue(self.sync(crew("ready")))
         self.assertEqual(self.state()["sessions"], [["claude", "ready"]])
 
     def test_an_unchanged_crew_is_not_rewritten_until_the_heartbeat(self):
         self.sync(crew("idle"))
         seq = self.state()["seq"]
-        self.clock.now += 59
+        self.later(59)
         self.assertFalse(self.sync(crew("idle")))
-        self.clock.now += 1
+        self.later(1)
         self.assertTrue(self.sync(crew("idle")))
         self.assertEqual(self.state()["seq"], seq + 1)
 
     def test_token_totals_alone_are_written_at_most_once_a_minute(self):
         self.sync(crew("working"), {"claude": 1})
-        self.clock.now += 10
+        self.later(10)
         self.assertFalse(self.sync(crew("working"), {"claude": 2}))
-        self.clock.now += 50
+        self.later(50)
         self.assertTrue(self.sync(crew("working"), {"claude": 3}))
         self.assertEqual(self.state()["tokens"]["claude"], 3)
 
     def test_totals_that_become_known_are_written_without_waiting(self):
         self.sync(crew("working"), {"claude": None, "codex": None})
-        self.clock.now += 5
+        self.later(5)
         self.assertTrue(self.sync(crew("working"), {"claude": 7, "codex": 1}))
-        self.clock.now += 5
+        self.later(5)
         self.assertFalse(self.sync(crew("working"), {"claude": 8, "codex": 1}))
 
     def test_a_crew_change_carries_the_latest_tokens(self):
         self.sync(crew("working"), {"claude": 1})
-        self.clock.now += 5
+        self.later(5)
         self.sync(crew("ready"), {"claude": 2})
         self.assertEqual(self.state()["tokens"]["claude"], 2)
 
@@ -123,10 +128,10 @@ class MailboxTest(unittest.TestCase):
         self.assertFalse(self.sync(crew("working")))
         self.assertEqual(self.box.error, "URLError")
         self.bar.fail = None
-        self.clock.now += 1
+        self.later(1)
         self.assertFalse(self.sync(crew("working")))  # Still backing off: nothing is sent.
         self.assertEqual(self.bar.calls, ["write"])
-        self.clock.now += 1
+        self.later(1)
         self.assertTrue(self.sync(crew("working")))
         self.assertIsNone(self.box.error)
 
@@ -137,67 +142,88 @@ class MailboxTest(unittest.TestCase):
             self.sync(crew("working"))
         self.assertEqual(self.box.backoff, mailbox.MAX_BACKOFF)
 
-    def test_a_slow_bar_backs_off_although_the_write_succeeded(self):
-        self.bar.delay = 1.5  # Each request is judged on its own: 1.5 s is under SLOW.
+    def test_a_slow_write_is_reported_even_when_the_rename_is_fast(self):
+        self.bar.delays = {"write": 2.5}
         self.assertTrue(self.sync(crew("working")))
-        self.assertIsNone(self.box.error)
-        self.bar.delay = 2.5
-        self.clock.now += 5
-        self.sync(crew("ready"))
         self.assertEqual(self.box.error, "SlowBar")
         self.assertFalse(self.box.ready())
 
-    def test_app_installed_is_checked_once_a_minute(self):
-        self.assertTrue(self.box.app_installed())
-        self.bar.apps = set()
-        self.clock.now += 30
-        self.assertTrue(self.box.app_installed())
-        self.clock.now += 30
-        self.assertFalse(self.box.app_installed())
-        self.assertEqual(self.bar.calls.count("list"), 2)
+    # ---------- app.json ----------
 
-    def ack(self, run, n, seq):
-        self.bar.files[ACK] = json.dumps({"schema": 1, "run": run, "ack": n, "seq": seq}).encode()
+    def test_no_app_json_means_no_app(self):
+        self.assertFalse(self.box.app_running())
+
+    def test_a_running_app_is_followed_until_its_beat_stops(self):
+        self.app(beat=0)
+        self.assertTrue(self.box.app_running())
+        self.later(60)
+        self.app(beat=1)
+        self.assertTrue(self.box.app_running())
+        self.later(mailbox.ALIVE_TIMEOUT + 1)  # Back held, or the bar rebooted: no goodbye.
+        self.assertFalse(self.box.app_running())
+
+    def test_an_app_that_quits_says_so(self):
+        self.app()
+        self.assertTrue(self.box.app_running())
+        self.app(running=False)
+        self.later(mailbox.READ_RUNNING)
+        self.assertFalse(self.box.app_running())
+
+    def test_app_json_is_read_slowly_while_the_app_does_not_run(self):
+        self.box.app_running()
+        self.later(mailbox.READ_IDLE - 1)
+        self.box.app_running()
+        self.assertEqual(self.bar.calls.count("read"), 1)
+
+    def test_a_new_launch_rewrites_the_crew_at_once(self):
+        self.app(run=1)
+        self.box.app_running()
+        self.sync(crew("working"))
+        self.app(run=2)  # Reinstalled: the app's storage was wiped.
+        self.later(mailbox.READ_RUNNING)
+        self.box.app_running()
+        self.later(mailbox.MIN_INTERVAL)
+        self.assertTrue(self.sync(crew("working")))
 
     def test_an_ok_press_acknowledges_what_that_write_presented(self):
+        self.app(ack=4)
+        self.box.app_running(True)
         ready = crew("ready", "working")
-        self.box.sync(ready, [], None, None, ready)
+        self.sync(ready)
+        self.app(ack=5, seq=self.state()["seq"])
+        self.later(mailbox.READ_ACK)
+        self.box.app_running(True)
+        self.assertEqual(self.box.acknowledged(), ready)
+        self.assertEqual(self.box.acknowledged(), [])  # Once.
+
+    def test_the_ok_count_of_a_launch_is_a_baseline(self):
+        self.app(run=1, ack=3)
+        self.box.app_running(True)
+        self.sync(crew("ready"))
+        self.app(run=2, ack=3, seq=self.state()["seq"])
+        self.later(mailbox.READ_ACK)
+        self.box.app_running(True)
+        self.assertEqual(self.box.acknowledged(), [])
+
+    def test_ok_reaches_results_that_replaced_others_without_a_new_write(self):
+        self.app()
+        self.box.app_running(True)
+        self.box.sync(crew("ready", version="r1"), [], None, None, crew("ready", version="r1"))
         seq = self.state()["seq"]
-        self.assertEqual(self.box.acknowledged(True), [])  # First read: notes there is no press yet.
-        self.ack(7, 1, seq)
-        self.clock.now += 2
-        self.assertEqual(self.box.acknowledged(True), ready)
-        self.clock.now += 2
-        self.assertEqual(self.box.acknowledged(True), [])  # The same press is not replayed.
+        self.later(5)
+        newer = crew("ready", version="r2")  # Same picture, another result: nothing is written.
+        self.assertFalse(self.box.sync(newer, [], None, None, newer))
+        self.app(ack=1, seq=seq)
+        self.later(mailbox.READ_ACK)
+        self.box.app_running(True)
+        self.assertEqual(self.box.acknowledged(), newer)
 
-    def test_an_old_press_is_not_replayed_after_a_restart(self):
-        self.ack(7, 3, 1)
-        self.assertEqual(self.box.acknowledged(False), [])  # Read once at start, whatever is acknowledgeable.
-        self.clock.now += 2
-        self.assertEqual(self.box.acknowledged(True), [])
-
-    def test_ack_is_only_polled_while_something_is_acknowledgeable(self):
-        self.box.acknowledged(False)
-        reads = self.bar.calls.count("read")
-        self.clock.now += 10
-        self.box.acknowledged(False)
-        self.assertEqual(self.bar.calls.count("read"), reads)
-
-    def test_a_new_launch_with_the_same_count_still_acknowledges(self):
-        ready = crew("ready")
-        self.box.sync(ready, [], None, None, ready)
-        seq = self.state()["seq"]
-        self.ack(1, 1, seq)
-        self.box.acknowledged(True)
-        self.ack(2, 1, seq)
-        self.clock.now += 2
-        self.assertEqual(self.box.acknowledged(True), ready)
-
-    def test_an_unreadable_ack_file_is_ignored(self):
-        self.box.acknowledged(True)
-        self.bar.files[ACK] = b"{"
-        self.clock.now += 2
-        self.assertEqual(self.box.acknowledged(True), [])
+    def test_a_malformed_app_json_is_no_app(self):
+        for raw in [b"{", b"[]", json.dumps({"schema": 1, "run": 1, "beat": 0, "running": True, "ack": 0,
+                                             "seq": [1]}).encode()]:
+            self.bar.files[APP] = raw
+            self.later(mailbox.READ_IDLE)
+            self.assertFalse(self.box.app_running(True), raw)
 
 
 if __name__ == "__main__":

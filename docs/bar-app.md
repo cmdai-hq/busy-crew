@@ -14,17 +14,17 @@ the Mac's link to the bar.
 Mac collector ──POST /api/storage/write, then rename──▶ /ext/apps_data/js_apps/app.busycrew.crew/state.json
                                                           ▲ GET /api/storage/read?path=/ext/data/state.json (localhost)
                                                      the app draws the crew
-Mac collector ◀──GET /api/storage/read── ack.json ◀── the app, when OK is pressed
+Mac collector ◀──GET /api/storage/read── app.json ◀── the app: at launch, every minute, on OK, on quit
 ```
 
 `/ext/data` is the app's sandbox; on firmware 1.4.1 the HTTP API reaches it as
-`/ext/apps_data/js_apps/<app id>`. That path was observed on a bar, not documented by BUSY: the collector checks it
-before relying on it.
+`/ext/apps_data/js_apps/<app id>`. That path was observed on a bar, not documented by BUSY. The collector relies on
+it only while it reads a fresh `app.json` there, which proves the path and that the app runs.
 
 ### `state.json`, written by the Mac
 
 ```json
-{"schema": 1, "seq": 42,
+{"schema": 1, "seq": 42, "at": 1800000000,
  "sessions": [["claude", "waiting"], ["claude", "working"], ["codex", "ready"]],
  "errors": [],
  "tokens": {"claude": 563744455, "codex": 1447757},
@@ -36,13 +36,24 @@ before relying on it.
 - `tokens`, `month`: today's and this month's totals per family, or `null` while unknown.
 - `seq` grows with every write. The collector rewrites the file at least once a minute; the app shows the crew as
   unknown (`?`) after three minutes without a new `seq`, so a sleeping Mac never leaves a stale picture.
+- `at` is when the Mac wrote it, in Unix seconds. Read against the bar's own clock at launch, it shows an old file
+  as offline at once instead of three minutes later.
 - A higher `schema` makes the app ask for its own update on the back screen.
 
-### `ack.json`, written by the app
+### `app.json`, written by the app
 
-`{"schema": 1, "run": 123456, "ack": 3, "seq": 42}`: OK was pressed for the third time in launch `run`, while state
-`seq` was on screen. The collector acknowledges the finished responses it presented, as for OK in direct mode, when
-`run` or `ack` differs from what it last saw.
+`{"schema": 1, "run": 123456, "beat": 7, "running": true, "ack": 3, "seq": 42}`, written at launch, every minute
+(`beat` grows), when OK is pressed (`ack` grows, `seq` names the state on screen) and when Back quits
+(`running: false`). One write at a time: OK presses cannot pile up requests.
+
+- The collector draws itself unless the app runs: `running` is true and `beat` or `ack` changed within 150 s. Back
+  hands the screen back within 5 s; a quit the app cannot announce (Back held, a reboot) within 150 s.
+- A new `run` is a launch: its `ack` is a baseline, never an OK press, and the collector writes the crew again at
+  once, since a reinstall wipes the app's storage. The app continues its OK count from the previous launch's file,
+  so a repeated `run` never hides a press.
+- OK acknowledges what is on screen, as in direct mode: only the live crew view (or any view while an agent waits),
+  only finished responses. The collector acknowledges the sessions it presented in write `seq`, refreshed while
+  the picture stays the same.
 
 ## Rules the bar imposes
 
@@ -54,15 +65,14 @@ These come from tests on a BUSY Bar with firmware 1.4.1 (November 2026):
 | Write `state.tmp`, then rename it over `state.json` | A plain overwrite cut off mid-write leaves an empty file; rename replaces the file whole |
 | Write only when the state changes, tokens at most once a minute, plus the one-minute heartbeat | The storage is eMMC; a few thousand small writes a day is decades of wear, one per second is not |
 | The app reads every 2 seconds, one request at a time | Every request goes through the same single web server as drawing |
-| In app mode the collector neither draws nor reacts to the buttons | An equal-priority draw from another app replaces the screen, and the buttons reach both the app and the Mac |
+| While the app runs, the collector neither draws nor reacts to the buttons | An equal-priority draw from another app replaces the screen, and the buttons reach both the app and the Mac |
 
 Measured at that pace: no torn or missing read in 117 reads, writes answered in 56 ms or less.
 
 ## Turning it on
 
 Install the app on the bar, then run `busy-crew install --display app` on the Mac (`--display overlay` goes back).
-The collector checks once a minute whether the app is installed: until it is, and after it is removed, it keeps
-drawing on the bar itself.
+The collector draws on the bar itself whenever the app is not running, and hands the screen over when it starts.
 
 ## Without a Mac
 
