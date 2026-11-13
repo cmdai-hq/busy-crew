@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 — 2026-11-14
 
 - Add Busy Crew's app for the BUSY Bar (`bar-app/`, `app.busycrew.crew`, for the
   BUSY Apps Catalog): it draws the crew on the bar itself, with the same pixels
