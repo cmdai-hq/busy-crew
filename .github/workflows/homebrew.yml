@@ -86,6 +86,9 @@ jobs:
           taps="$(brew --repository)/Library/Taps/cmdai-hq"
           mkdir -p "$taps"
           ln -s "$GITHUB_WORKSPACE/tap" "$taps/homebrew-tap"
+          # Homebrew 7 loads formulae only from trusted taps. `brew install` trusts what it names, but
+          # `brew --cache` below does not, and the poured bottle would then be fetched from the release.
+          brew trust --tap cmdai-hq/tap
           brew install --build-bottle cmdai-hq/tap/busy-crew
           mkdir "$RUNNER_TEMP/bottle"
           cd "$RUNNER_TEMP/bottle"
